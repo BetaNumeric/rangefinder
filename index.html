@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <!-- Lock orientation to portrait on mobile -->
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="screen-orientation" content="portrait">
+  <meta name="orientation" content="portrait">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta http-equiv="ScreenOrientation" content="autoRotate:disabled">
+  <link rel="apple-touch-icon" href="assets/images/rangefinder_touch-icon_180.png">
+  <link rel="apple-touch-icon" sizes="180x180" href="assets/images/rangefinder_touch-icon_180.png">
+  <link rel="icon" type="image/png" sizes="32x32" href="assets/images/rangefinder_32.png">
+  <link rel="icon" type="image/png" sizes="16x16" href="assets/images/rangefinder_16.png">
+  <link rel="icon" type="image/png" sizes="192x192" href="assets/images/rangefinder_192.png">
+  <link rel="icon" type="image/png" sizes="512x512" href="assets/images/rangefinder_512.png">
+  <link rel="manifest" href="manifest.json">
+  <meta http-equiv="Content-Security-Policy" content="upgrade-insecure-requests">
+
+  <title>Rangefinder</title>
+
+  <!-- Add after your meta tags but before other scripts -->
+  <script>
+    let googleMapsLoaded = false;
+    function initMap() {
+      console.log("Google Maps API loaded");
+      googleMapsLoaded = true;
+      if (window.initializeInteractiveMap) {
+        window.initializeInteractiveMap();
+      }
+    }
+  </script>
+  <script async defer
+    src="https://maps.googleapis.com/maps/api/js?key=AIzaSyCAkeIvVvimW-5uchP9e8mDnSovuh5bNdo&libraries=places,marker&callback=initMap">
+  </script>
+
+  <!-- PLEASE NO CHANGES BELOW THIS LINE (UNTIL I SAY SO) -->
+  <script language="javascript" type="text/javascript" src="libraries/p5.min.js"></script>
+  <script language="javascript" type="text/javascript" src="answerScreen.js"></script>
+  <script language="javascript" type="text/javascript" src="dataLoader.js"></script>
+  <script language="javascript" type="text/javascript" src="discoveryMapScreen.js"></script>
+  <script language="javascript" type="text/javascript" src="dropdownMenu.js"></script>
+  <script language="javascript" type="text/javascript" src="gameScreen.js"></script>
+  <script language="javascript" type="text/javascript" src="interactiveMap.js"></script>
+  <script language="javascript" type="text/javascript" src="mainMenuScreen.js"></script>
+  <script language="javascript" type="text/javascript" src="mapSettingsScreen.js"></script>
+  <script language="javascript" type="text/javascript" src="orientationService.js"></script>
+  <script language="javascript" type="text/javascript" src="permissionScreen.js"></script>
+  <script language="javascript" type="text/javascript" src="scoringService.js"></script>
+  <script language="javascript" type="text/javascript" src="searchLocationScreen.js"></script>
+  <script language="javascript" type="text/javascript" src="settingsScreen.js"></script>
+  <script language="javascript" type="text/javascript" src="splashScreen.js"></script>
+  <script language="javascript" type="text/javascript" src="main.js"></script>
+  <!-- OK, YOU CAN MAKE CHANGES BELOW THIS LINE AGAIN -->
+
+  <style>
+    .gmnoprint a, .gmnoprint span {
+        display:none;
+    }
+    .gmnoprint div {
+        background:none !important;
+    }
+    a[href^="http://maps.google.com/maps"]{display:none !important}
+    a[href^="https://maps.google.com/maps"]{display:none !important}
+
+
+    :root {
+      /* Light theme variables */
+      --background-color: rgb(245, 245, 245);
+      --text-color: rgb(0, 0, 0);
+      --button-bg: rgb(200, 200, 200);
+      --button-text: rgb(0, 0, 0);
+      --button-locked: rgb(225, 225, 225);
+      --button-locked-text: rgb(150, 150, 150);
+    }
+
+    :root[data-theme="dark"] {
+      /* Dark theme variables */
+      --background-color: rgb(33, 33, 33);
+      --text-color: rgb(255, 255, 255);
+      --button-bg: rgb(100, 100, 100);
+      --button-text: rgb(255, 255, 255);
+      --button-locked: rgb(50, 50, 50);
+      --button-locked-text: rgb(150, 150, 150);
+    }
+
+    body {
+      padding: 0;
+      margin: 0;
+      overscroll-behavior: none;
+      background-color: var(--background-color);
+      color: var(--text-color);
+      display: flex;
+      justify-content: center;
+      align-items: flex-start;
+      min-height: 100vh;
+      -webkit-transform: translateZ(0);
+      -moz-transform: translateZ(0);
+      -ms-transform: translateZ(0);
+      -o-transform: translateZ(0);
+      transform: translateZ(0);
+      overflow: hidden;
+      touch-action: none;
+      position: fixed;
+      width: 100%;
+      height: 100%;
+    }
+    canvas {
+      pointer-events: none;
+      position: relative;
+      z-index: 0;
+    }
+
+    /* Add after your existing styles */
+    #map {
+      position: absolute;
+      z-index: 1;
+      background: white;
+      pointer-events: auto !important;
+      touch-action: manipulation !important;
+      user-select: none;
+      width: 100% !important;
+      height: 100% !important;
+      /* iOS fixes */
+      transform: translate3d(0,0,0);
+      -webkit-transform: translate3d(0,0,0);
+      -webkit-overflow-scrolling: touch;
+      overflow: hidden;
+    }
+
+    /* Add iOS-specific wrapper */
+    .map-container {
+      position: absolute;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      /* iOS fixes */
+      transform: translate3d(0,0,0);
+      -webkit-transform: translate3d(0,0,0);
+      -webkit-overflow-scrolling: touch;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <!-- Add your game screens here as sections or divs -->
+  </main>
+  <script>
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('/sw.js')
+        .then((registration) => {
+          console.log('Service Worker registered');
+        })
+        .catch((error) => {
+          console.error('Service Worker registration failed:', error);
+        });
+    }
+  </script>
+</body>
+</html>
