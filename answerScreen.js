@@ -61,6 +61,88 @@ function drawAnswerScreen() {
     }
   }
 
+  if (userSettings.practiceMode) {
+    // Use game screen's input handling but don't show joysticks
+    if (!distanceLocked) {
+      const beta = orientationService.getBeta();
+      if (beta !== null) {
+        // Map each order of magnitude to 10° segments
+        const ranges = [
+          { max: 0.01, tiltRange: [0, 10] },
+          { max: 0.1, tiltRange: [10, 20] },
+          { max: 1, tiltRange: [20, 30] },
+          { max: 10, tiltRange: [30, 40] },
+          { max: 100, tiltRange: [40, 50] },
+          { max: 1000, tiltRange: [50, 60] },
+          { max: userSettings.radius, tiltRange: [60, 70] }
+        ];
+
+        // Find which range we're in
+        for (let range of ranges) {
+          if (beta <= range.tiltRange[1]) {
+            // Calculate normalized position within this range
+            const rangeBeta = (beta - range.tiltRange[0]) / 
+              (range.tiltRange[1] - range.tiltRange[0]);
+            // Map to the value range
+            const prevMax = ranges[ranges.indexOf(range) - 1]?.max || 0.001;
+            const value = prevMax + (range.max - prevMax) * rangeBeta;
+
+            
+            // Apply rounding based on the range
+            if (value <= 0.01) {
+              userGuessDistance = Number(value.toFixed(3));
+            } else if (value <= 0.1) {
+              userGuessDistance = Number(value.toFixed(2));
+            } else if (value <= 10) {
+              userGuessDistance = Number(value.toFixed(1));
+            } else if (value <= 1000) {
+              userGuessDistance = Math.round(value);
+            } else if (value <= 10000) {
+              userGuessDistance = Math.round(value/10) * 10;
+            } else {
+              userGuessDistance = Math.round(value/100) * 100;
+            }
+            break;
+          }
+        }
+        userGuessDistance = constrain(userGuessDistance, 0.001, userSettings.radius);
+      }
+    }
+    
+    if (!directionLocked) {
+      userGuessDirection = orientationService.getHeading();
+    }
+
+    // Update current answer with new values
+    if (userGuessDistance !== currentAnswer.guessDistance || 
+        userGuessDirection !== currentAnswer.guessDirection) {
+      
+      // Constrain distance to max range setting
+      userGuessDistance = constrain(userGuessDistance, 0.001, userSettings.radius);
+      
+      let score = scoringService.calculateScore(
+        currentAnswer.correctDistance,
+        userGuessDistance,
+        currentAnswer.correctDirection,
+        userGuessDirection,
+        currentAnswer.playerLat,
+        currentAnswer.playerLon,
+        currentAnswer.targetLat,
+        currentAnswer.targetLon
+      );
+
+      // Update display values but don't save to history
+      currentAnswer.guessDistance = userGuessDistance;
+      currentAnswer.guessDirection = userGuessDirection;
+      currentAnswer.score1 = score.score1;
+      currentAnswer.score2 = score.score2;
+      
+      // Update only paths on the map, not markers
+      if (interactiveMap.map) {
+        interactiveMap.updatePaths(currentAnswer);
+      }
+    }
+  }
 
   let distanceError = Math.abs(currentAnswer.correctDistance - currentAnswer.guessDistance);
   let distanceAccuracy = Math.max(0, 100 - (distanceError / currentAnswer.correctDistance * 100));
@@ -164,6 +246,7 @@ function drawAnswerScreen() {
   
   // Add country name
   textSize(18);
+  noStroke();
   textStyle(NORMAL);
   fill(getTextColor());
   text(currentQuestion.country, width/2, locationY + 35);
@@ -210,14 +293,16 @@ function drawAnswerScreen() {
   textSize(20);
   fill(getTextColor());
   text("Off by " + differenceDistance + " km", width/2, height/4 + height/5.5);
+  fill(getScoreP5Color(currentAnswer.score2));
+  text("Score: " + currentAnswer.score2 + "%", width/2, height/4 + height/4.5);
 
   // Update score display
-  textSize(18);
-  fill(getScoreP5Color(currentAnswer.score2));
-  text("New Score: " + currentAnswer.score2 + "%", width/2 - 100, height/4 + height/4.5);
+  //textSize(18);
+  //fill(getScoreP5Color(currentAnswer.score2));
+  //text("New Score: " + currentAnswer.score2 + "%", width/2 - 100, height/4 + height/4.5);
   
-  fill(getScoreP5Color(currentAnswer.score1));
-  text("Old Score: " + currentAnswer.score1 + "%", width/2 + 100, height/4 + height/4.5);
+  //fill(getScoreP5Color(currentAnswer.score1));
+  //text("Old Score: " + currentAnswer.score1 + "%", width/2 + 100, height/4 + height/4.5);
 
   // After drawing the score
   const currentDataset = localStorage.getItem('selectedDataset') || 'global';
@@ -260,6 +345,22 @@ function drawAnswerScreen() {
 }
 
 function drawAccuracyCircle(x, y, radius, accuracy, label, guessValue, correctValue) {
+  // Parse values to numbers for comparison
+  const guessNum = parseFloat(guessValue);
+  const correctNum = parseFloat(correctValue);
+  
+  // Special handling for direction angles
+  const isDirection = label === "Direction";
+  let isOvershot = false;
+  
+  if (isDirection) {
+    // Calculate the shortest path between angles
+    let diff = ((guessNum - correctNum + 180 + 360) % 360) - 180;
+    isOvershot = diff > 0;  // Positive diff means we need to go counterclockwise
+  } else {
+    isOvershot = guessNum > correctNum;
+  }
+  
   noFill();
   stroke(getButtonColor());
   strokeWeight(10);
@@ -267,7 +368,18 @@ function drawAccuracyCircle(x, y, radius, accuracy, label, guessValue, correctVa
 
   let col = getScoreP5Color(accuracy);
   stroke(col);
+  
+  push();
+  if (isOvershot) {
+    // For overshot values, flip the arc horizontally
+    translate(x, y);
+    scale(-1, 1);
+    translate(-x, -y);
+  }
+  
+  // Draw accuracy arc
   arc(x, y, radius * 2, radius * 2, -90, -90 + (accuracy * 3.6));
+  pop();
 
   noStroke();
   fill(getTextColor());
@@ -278,11 +390,18 @@ function drawAccuracyCircle(x, y, radius, accuracy, label, guessValue, correctVa
   
   textSize(24);
   fill(col);
+  // Add arrow to indicate clockwise/counterclockwise for direction
+  //text(guessValue + (isDirection ? (isOvershot ? "↺" : "↻") : (isOvershot ? "↑" : "↓")), x, y);
   text(guessValue, x, y);
   
   textSize(16);
   fill(getTextColor());
   text("(" + correctValue + ")", x, y + radius/2);
+  
+  // Add accuracy percentage for debugging
+  //textAlign(LEFT, CENTER);
+  //textSize(14);
+  //text(Math.round(accuracy) + "%", x + radius + 10, y);
 }
 
 function loadStaticMap() {
@@ -334,7 +453,7 @@ function loadStaticMap() {
     targetPathString,
     guessPathString,
     differencePathString,
-    `key=AIzaSyCAkeIvVvimW-5uchP9e8mDnSovuh5bNdo`
+    `key=${GOOGLE_MAPS_JS_API_KEY}`
   ];
   
   let base = "https://maps.googleapis.com/maps/api/staticmap";
@@ -455,6 +574,7 @@ function cleanupAnswerScreen() {
   interactiveMap.remove();
   mapInitialized = false;
   this.scoreSaved = false;
+  userSettings.practiceMode = false;  // Turn off practice mode
   
   // Remove location link
   const locationLink = document.getElementById('location-link');
