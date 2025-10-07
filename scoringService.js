@@ -126,6 +126,11 @@ let scoringService = {
     // Track discovered location
     this.addDiscoveredLocation(scoreData);
     
+    // Update discovery map markers if we're on that screen
+    if (currentScreen === 'discoveries' && discoveryMap.map) {
+      discoveryMap.updateMarkers();
+    }
+    
     return scoreData;
   },
 
@@ -147,6 +152,7 @@ let scoringService = {
       bestScore: discovered[scoreData.locationName] 
         ? Math.max(scoreData.score, discovered[scoreData.locationName].bestScore)
         : scoreData.score,
+      lastScore: scoreData.score,
       plays: discovered[scoreData.locationName]
         ? discovered[scoreData.locationName].plays + 1
         : 1

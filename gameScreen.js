@@ -14,7 +14,7 @@ Game screen implementation that handles:
 let directionLocked = false;
 let distanceLocked = false;
 
-const RECENT_LOCATIONS_SIZE = 100;
+const RECENT_LOCATIONS_SIZE = 15;
 let recentLocations = [];
 
 const LAYOUT = {
@@ -34,7 +34,7 @@ const LAYOUT = {
   errorY: h => h - 120,
   tiltInput: {
     maxDistance: 20000,
-    minBeta: -90,
+    minBeta: 0,
     maxBeta: 90,
     y: h => h/2 + h/8
   },
@@ -75,6 +75,7 @@ const JOYSTICK = {
   dragStarted: false,
   touchStartX: 0,
   touchStartY: 0,
+  wasDragging: false,
   // Use getter for ranges to always use current maxOffset
   get distanceRanges() {
     return [
@@ -87,11 +88,11 @@ const JOYSTICK = {
   },
   get directionRanges() {
     return [
-      { threshold: this.maxOffset*0.2, step: 0.005 },
+      { threshold: this.maxOffset*0.2, step: 0.01 },
       { threshold: this.maxOffset*0.4, step: 0.05 },
       { threshold: this.maxOffset*0.6, step: 0.1 },
-      { threshold: this.maxOffset*0.8, step: 0.5 },
-      { threshold: this.maxOffset, step: 1 }
+      { threshold: this.maxOffset*0.8, step: 1 },
+      { threshold: this.maxOffset, step: 2 }
     ];
   }
 };
@@ -104,6 +105,9 @@ document.addEventListener('touchmove', function(e) {
 }, { passive: false });
 
 function drawGameScreen() {
+  // Reset any lingering transformations at the start
+  resetMatrix();
+  
   if (dataLoader.isLoading) {
     if (dropdownMenu.isOpen) {
       dropdownMenu.cleanup();
@@ -131,12 +135,16 @@ function drawGameScreen() {
     }
   }
 
+  // Draw compass with explicit push/pop pair
+  push();
   drawCompass();
+  pop();
 
-  textAlign(CENTER, CENTER);
-
-  textSize(20);
+  // Reset again before drawing other elements
+  resetMatrix();
   
+  textAlign(CENTER, CENTER);
+  textSize(20);
   fill(getTextColor());
 
   // Draw location name with dynamic font size
@@ -170,12 +178,24 @@ function drawGameScreen() {
   
   // Draw country with smaller size
   textAlign(CENTER, BOTTOM);
-  textSize(fontSize * 0.65);
+  textSize(fontSize * 0.7);
   textStyle(NORMAL);
-  text(`(${currentQuestion.country})`, boxX, height/2 + fontSize * 1.25);
+  text(`(${currentQuestion.country})`, boxX, height/2 + fontSize * 1.35);
+  pop();
 
+  // Draw direction arrow with explicit push/pop
+  push();
   drawDirectionArrow();
+  pop();
 
+  // Reset before drawing UI elements
+  resetMatrix();
+  
+  let heading = directionLocked ? userGuessDirection : orientationService.getHeading();
+  let directionBtn = drawLockButton(Math.round(heading), directionLocked, width/2, LAYOUT.statusY(height), '°');
+  let distanceBtn = drawLockButton(userGuessDistance, distanceLocked, width/2, LAYOUT.distanceY(height), 'km');
+
+  // Add back the submit/try again button
   let btnX = width/2 - LAYOUT.button.width/2;
   let btnY = LAYOUT.button.y(height);
   
@@ -229,10 +249,6 @@ function drawGameScreen() {
     );
   }
 
-  let heading = directionLocked ? userGuessDirection : orientationService.getHeading();
-  let directionBtn = drawLockButton(Math.round(heading), directionLocked, width/2, LAYOUT.statusY(height), '°');
-  let distanceBtn = drawLockButton(userGuessDistance, distanceLocked, width/2, LAYOUT.distanceY(height), 'km');
-
   // Add mouse drag handling near the top of drawGameScreen
   if (mouseIsPressed) {
     let dirTouchArea = {
@@ -255,19 +271,20 @@ function drawGameScreen() {
     
     if (!JOYSTICK.active) {
       if (inDirArea || inDistArea) {
+        console.log("Starting touch");
         JOYSTICK.active = true;
+        // Don't set dragStarted here anymore
         JOYSTICK.adjustingDistance = inDistArea;
         JOYSTICK.touchStartX = mouseX;
         JOYSTICK.touchStartY = mouseY;
         JOYSTICK.startY = mouseY;
         JOYSTICK.currentY = mouseY;
-        JOYSTICK.dragStarted = false;
         JOYSTICK.baseValue = inDistArea ? userGuessDistance : userGuessDirection;
       }
     } else {
       // Check if we've moved enough to consider it a drag
       let dragDist = dist(JOYSTICK.touchStartX, JOYSTICK.touchStartY, mouseX, mouseY);
-      if (dragDist > 4) {
+      if (dragDist > 5) { // Increased threshold for better click detection
         JOYSTICK.dragStarted = true;
         if (JOYSTICK.adjustingDistance) {
           distanceLocked = true;
@@ -283,38 +300,23 @@ function drawGameScreen() {
         
         
         if (JOYSTICK.adjustingDistance) {
-          // Find appropriate step size based on offset
-          let step = 0;
-          let multiplier = 1;
-          for (let range of JOYSTICK.distanceRanges) {
-            if (abs(offset) <= range.threshold) {
-              step = range.step;
-              multiplier = range.multiplier;
-              break;
-            }
-          }
-          
-          // Store precise internal value
+          // Store precise internal value on first touch
           if (!JOYSTICK.internalValue) {
             JOYSTICK.internalValue = userGuessDistance;
           }
           
-          // Scale step size based on current value
-          if (JOYSTICK.internalValue > 1000) {
-            step *= multiplier*10;
-          } else if (JOYSTICK.internalValue > 100) {
-            step *= multiplier*1;
-          } else if (JOYSTICK.internalValue > 10) {
-            step *= multiplier*0.1;
-          } else if (JOYSTICK.internalValue > 1) {
-            step *= multiplier*0.01;
-          }
+          // Calculate percentage change based on offset
+          const maxChange = 0.05;
+          // Use exponential curve for more precision on small movements
+          const normalizedOffset = offset / JOYSTICK.maxOffset;
+          const changePercent = Math.sign(normalizedOffset) * 
+            maxChange * Math.pow(Math.abs(normalizedOffset), 2);
           
-          // Apply step based on direction
+          // Apply exponential change based on current value
           if (offset < 0) {
-            JOYSTICK.internalValue += step;
+            JOYSTICK.internalValue *= (1 + Math.abs(changePercent));
           } else if (offset > 0) {
-            JOYSTICK.internalValue -= step;
+            JOYSTICK.internalValue /= (1 + Math.abs(changePercent));
           }
           
           // Constrain internal value
@@ -327,7 +329,8 @@ function drawGameScreen() {
             { max: 1, decimals: 1 },
             { max: 10, decimals: 1 },
             { max: 100, decimals: 0 },
-            { max: 1000, decimals: -1 },
+            { max: 1000, decimals: 0 },
+            { max: 10000, decimals: -1 },
             { max: 20000, decimals: -2 }
           ];
 
@@ -344,34 +347,35 @@ function drawGameScreen() {
             }
           }
         } else {
-          // Adjust direction continuously with variable step size
-          // Store precise internal value on first touch
+          // Store precise internal value
           if (!JOYSTICK.internalDirection) {
             JOYSTICK.internalDirection = userGuessDirection;
           }
           
-          // Find appropriate step size based on offset
-          let step = 0;
-          for (let range of JOYSTICK.directionRanges) {
-            if (abs(offset) <= range.threshold) {
-              step = range.step;
-              break;
-            }
-          }
+          // Use same exponential curve for direction changes
+          const maxDirectionChange = 4.0;  // Degrees per frame
+          const normalizedOffset = offset / JOYSTICK.maxOffset;
+          const changeAmount = maxDirectionChange * Math.pow(Math.abs(normalizedOffset), 2);
           
-          // Apply step based on direction
+          // Apply direction change
           if (offset < 0) {
-            JOYSTICK.internalDirection = (JOYSTICK.internalDirection + step) % 360;
+            JOYSTICK.internalDirection += changeAmount;
           } else if (offset > 0) {
-            JOYSTICK.internalDirection = (JOYSTICK.internalDirection - step + 360) % 360;
+            JOYSTICK.internalDirection -= changeAmount;
           }
           
-          // Round for display
+          // Keep direction within 0-360 range
+          JOYSTICK.internalDirection = (JOYSTICK.internalDirection + 360) % 360;
           userGuessDirection = Math.round(JOYSTICK.internalDirection);
         }
       }
     }
   } else if (!touches.length) {
+    // Only set wasDragging if we actually dragged
+    if (JOYSTICK.dragStarted) {
+      JOYSTICK.wasDragging = true;
+    }
+    
     // Reset joystick when no input
     JOYSTICK.active = false;
     JOYSTICK.dragStarted = false;
@@ -389,7 +393,18 @@ function drawGameScreen() {
 
   if (!orientationService.hasCompass()) {
     fill(255, 0, 0);
-    text("Compass not available", width/2, LAYOUT.errorY(height));
+    textAlign(CENTER, CENTER);
+    text("Compass not available", width/2, LAYOUT.errorY(height) - 30);
+    
+    // Add permission link button
+    drawInteractiveButton(
+      width/2 - 100, LAYOUT.errorY(height) - 15,
+      200, 40,
+      "Check Permissions",
+      () => {
+        goToScreen("permissions");
+      }
+    );
   }
   
   
@@ -402,18 +417,19 @@ function drawGameScreen() {
   
   // Update the click handling section:
   if (!mouseIsPressed && lastMousePressed) {
-    // Only handle unlock if we haven't dragged
-    if (!JOYSTICK.dragStarted) {
+    console.log("Mouse released. dragStarted:", JOYSTICK.dragStarted, "wasDragging:", JOYSTICK.wasDragging);
+    
+    // Only handle unlock if we haven't dragged or just finished dragging
+    if (!JOYSTICK.dragStarted && !JOYSTICK.wasDragging) {
+      console.log("Handling click");
       // Check for direction button clicks
       if (mouseX > directionBtn.x && mouseX < directionBtn.x + directionBtn.w &&
           mouseY > directionBtn.y && mouseY < directionBtn.y + directionBtn.h) {
         if (directionLocked) {
-          // Unlock if locked
           directionLocked = false;
           JOYSTICK.active = false;
           JOYSTICK.internalDirection = null;
         } else {
-          // Lock if unlocked
           directionLocked = true;
           userGuessDirection = Math.round(orientationService.getHeading());
         }
@@ -423,18 +439,18 @@ function drawGameScreen() {
       if (mouseX > distanceBtn.x && mouseX < distanceBtn.x + distanceBtn.w &&
           mouseY > distanceBtn.y && mouseY < distanceBtn.y + distanceBtn.h) {
         if (distanceLocked) {
-          // Unlock if locked
           distanceLocked = false;
           JOYSTICK.active = false;
           JOYSTICK.internalValue = null;
         } else {
-          // Lock if unlocked
           distanceLocked = true;
-          // Keep current tilt input value when locking
           userGuessDistance = userGuessDistance;
         }
       }
     }
+    
+    // Clear wasDragging flag after handling click
+    JOYSTICK.wasDragging = false;
   }
 }
 
@@ -460,36 +476,19 @@ function drawDirectionArrow() {
 }
 
 function drawCompass() {
-  if (compassRose) {
-    push();
-    imageMode(CENTER);
-    translate(width/2, height/2);
-    let compassSize = LAYOUT.compass.size(width, height);
-    let heading = directionLocked ? userGuessDirection : orientationService.getHeading();
-    rotate(-heading); 
-    
-    image(compassRose, 0, 0, compassSize, compassSize);
-    if (document.documentElement.getAttribute('data-theme') === 'dark') {
-      image(compassRoseInverted, 0, 0, compassSize, compassSize);
-    } else {
-      image(compassRose, 0, 0, compassSize, compassSize);
-    }
-    
-    //noTint();
-    
-    pop();
+  push();
+  imageMode(CENTER);
+  translate(width/2, height/2);
+  let compassSize = LAYOUT.compass.size(width, height);
+  let heading = directionLocked ? userGuessDirection : orientationService.getHeading();
+  rotate(-heading); 
+  
+  if (document.documentElement.getAttribute('data-theme') === 'dark') {
+    image(compassRoseInverted, 0, 0, compassSize, compassSize);
   } else {
-    push();
-    translate(width/2, height/2);
-    let compassSize = min(width, height) * 0.9;
-    fill(255, 255, 255, 200);
-    stroke(200);
-    ellipse(0, 0, compassSize, compassSize);
-    let heading = orientationService.getHeading();
-    rotate(-heading);
-    drawBasicCompass(compassSize);
-    pop();
+    image(compassRose, 0, 0, compassSize, compassSize);
   }
+  pop();
 }
 
 function drawBasicCompass(size) {
@@ -551,7 +550,8 @@ function drawTiltDistanceInput() {
     { max: 1, decimals: 1 },
     { max: 10, decimals: 1 },
     { max: 100, decimals: 0 },
-    { max: 1000, decimals: -1 },
+    { max: 1000, decimals: 0 },
+    { max: 10000, decimals: -1 },
     { max: 20000, decimals: -2 }
   ];
 
@@ -615,7 +615,8 @@ function submitGuess() {
       { max: 1, decimals: 1 },
       { max: 10, decimals: 1 },
       { max: 100, decimals: 0 },
-      { max: 1000, decimals: -1 },
+      { max: 1000, decimals: 0 },
+      { max: 10000, decimals: -1 },
       { max: 20000, decimals: -2 }
     ];
 

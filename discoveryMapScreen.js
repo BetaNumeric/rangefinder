@@ -99,6 +99,7 @@ let discoveryMap = {
       
       const options = [
         { value: 'best', text: 'Best Score' },
+        { value: 'last', text: 'Last Score' },
         { value: 'average', text: 'Average Score' },
         { value: 'distance', text: 'Distance Score' },
         { value: 'direction', text: 'Direction Score' }
@@ -184,7 +185,7 @@ let discoveryMap = {
     locations.forEach(loc => {
       const locationScores = scores
         .filter(s => s.locationName === loc.name)
-        .sort((a, b) => b.score - a.score);
+        .sort((a, b) => b.timestamp - a.timestamp);
       
       const avgScore = Math.round(
         locationScores.reduce((sum, s) => sum + s.score, 0) / locationScores.length
@@ -201,10 +202,20 @@ let discoveryMap = {
       const colorMode = localStorage.getItem('markerColorMode') || 'best';
       let markerColor;
       switch(colorMode) {
-        case 'average': markerColor = avgScore; break;
-        case 'distance': markerColor = avgDistanceScore; break;
-        case 'direction': markerColor = avgDirectionScore; break;
-        default: markerColor = loc.bestScore;
+        case 'last': 
+          markerColor = loc.lastScore || 0;
+          break;
+        case 'average': 
+          markerColor = avgScore; 
+          break;
+        case 'distance': 
+          markerColor = avgDistanceScore; 
+          break;
+        case 'direction': 
+          markerColor = avgDirectionScore; 
+          break;
+        default: 
+          markerColor = loc.bestScore;
       }
       
       const marker = new google.maps.Marker({
@@ -217,8 +228,6 @@ let discoveryMap = {
           fillColor: getScoreHexForMap(markerColor).replace('0x', '#'),
           fillOpacity: 0.7,
           strokeOpacity: 0.0,
-          //strokeWeight: 2,
-          //strokeColor: document.documentElement.getAttribute('data-theme') === 'dark' ? '#FFFFFF' : '#000000'
         }
       });
       
@@ -244,6 +253,9 @@ let discoveryMap = {
             ${loc.country}<br>
             Best Score: <span style="color: ${getScoreHexForMap(loc.bestScore).replace('0x', '#')}">
               ${loc.bestScore}%
+            </span><br>
+            Last Score: <span style="color: ${getScoreHexForMap(loc.lastScore).replace('0x', '#')}">
+              ${loc.lastScore}%
             </span><br>
             Average: ${avgScore}%<br>
             Distance: ${avgDistanceScore || 0}%<br>
@@ -326,9 +338,6 @@ let discoveryMap = {
 };
 
 function drawDiscoveryMapScreen() {
-
-
-
   // Initialize map if needed
   if (!discoveryMap.map) {
     discoveryMap.initialize();
@@ -345,9 +354,21 @@ function drawDiscoveryMapScreen() {
   const locations = scoringService.getDiscoveredLocations(currentDataset);
   
   textSize(20);
-  text(`${locations.length} in ${dataLoader.datasets[currentDataset].name}`, 
-    width/2, height/8 + 40);
+  // Show loading indicator if data is being loaded
+  if (dataLoader.isLoading) {
+    push();
+    textAlign(CENTER, CENTER);
+    text("Loading dataset", width/2, height/8 + 40);
     
+    // Add animated dots
+    const dots = ".".repeat((Math.floor(millis() / 500) % 4));
+    textAlign(LEFT);
+    text(dots, width/2 + 80, height/8 + 40);
+    pop();
+  } else {
+    text(`${locations.length} in ${dataLoader.datasets[currentDataset].name}`, 
+      width/2, height/8 + 40);
+  }
     
   // Draw dropdown menu
   dropdownMenu.draw('discoveries');
@@ -356,5 +377,4 @@ function drawDiscoveryMapScreen() {
     discoveryMap.remove();
     return;
   }
-    
 } 

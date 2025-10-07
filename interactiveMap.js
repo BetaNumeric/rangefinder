@@ -229,5 +229,43 @@ let interactiveMap = {
       this.mapElement = null;
       this.map = null;
     }
+  },
+
+  updatePaths(answer) {
+    // Clear existing paths
+    this.paths.forEach(path => path.setMap(null));
+    this.paths = [];
+
+    const playerPos = { lat: answer.playerLat, lng: answer.playerLon };
+    const targetPos = { lat: answer.targetLat, lng: answer.targetLon };
+    const guessPos = computeDestinationLatLon(
+      answer.playerLat,
+      answer.playerLon,
+      answer.guessDistance,
+      answer.guessDirection
+    );
+    guessPos.lng = guessPos.lon;
+
+    const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+    const mainLineColor = isDark ? '#FFFFFF' : '#000000';
+
+    // Add paths without updating markers
+    this.paths.push(new google.maps.Polyline({
+      path: [playerPos, guessPos],
+      geodesic: true,
+      strokeColor: getScoreHexForMap(answer.score2).replace('0x', '#'),
+      strokeOpacity: 1.0,
+      strokeWeight: 3,
+      map: this.map
+    }));
+
+    this.paths.push(new google.maps.Polyline({
+      path: [guessPos, targetPos],
+      geodesic: true,
+      strokeColor: mainLineColor,
+      strokeOpacity: 0.2,
+      strokeWeight: 1,
+      map: this.map
+    }));
   }
 };

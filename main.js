@@ -36,7 +36,8 @@ let mainCanvas;
 let enteredFromSearch = false;
 
 let userSettings = {
-  radius: 2000
+  radius: 2000,
+  practiceMode: false
 };
 
 window.initMap = function() {
@@ -174,6 +175,9 @@ async function setup() {
   
   textAlign(CENTER, CENTER);
 
+  // Set default player location
+  playerLocation = { lat: 0, lon: 0 };
+
   try {
     if (screen.orientation && screen.orientation.lock) {
       await screen.orientation.lock('portrait');
@@ -181,12 +185,17 @@ async function setup() {
       screen.lockOrientation('portrait');
     }
   } catch (error) {
+    console.log("Could not lock orientation:", error);
   }
   
   try {
     if ("geolocation" in navigator) {
       const position = await new Promise((resolve, reject) => {
-        navigator.geolocation.getCurrentPosition(resolve, reject);
+        navigator.geolocation.getCurrentPosition(resolve, reject, {
+          enableHighAccuracy: true,
+          timeout: 5000,
+          maximumAge: 0
+        });
       });
       playerLocation = {
         lat: position.coords.latitude,
@@ -220,6 +229,23 @@ async function setup() {
     if (currentScreen !== "permissions") {
       e.preventDefault();
     }
+  }, { passive: false });
+  
+  // Add these new listeners
+  mainCanvas.addEventListener('touchend', function(e) {
+    if (currentScreen !== "permissions") {
+      e.preventDefault();
+    }
+  }, { passive: false });
+  
+  mainCanvas.addEventListener('contextmenu', function(e) {
+    e.preventDefault();
+  });
+  
+  // Prevent long press
+  mainCanvas.addEventListener('touchstart', function(e) {
+    e.preventDefault();
+    return false;
   }, { passive: false });
 
   // Initialize dark mode from localStorage
@@ -277,6 +303,9 @@ function draw() {
       break;
     case "search":
       drawSearchLocationScreen();
+      break;
+    case "customLocations":
+      customLocationsScreen.draw();
       break;
   }
 
@@ -361,21 +390,8 @@ function startNewGame() {
     return;
   }
 
-  // Check if we need permissions first
-  if (!playerLocation || !orientationService.hasPermission) {
-    goToScreen("permissions");  // Changed from currentScreen = to goToScreen()
-    return;
-  }
-  
-  // Only proceed with game start if we have necessary permissions
-  if (!orientationService.getHeading()) {
-    orientationService.start(); 
-  }
-  
-  currentQuestionIndex = 0;
-  resetLockStates();
-  pickNewQuestion();
-  goToScreen("game");
+  // Show permissions screen, but don't start game immediately
+  goToScreen("permissions");
 }
 
 function drawCloseButton() {
@@ -409,17 +425,24 @@ function drawCloseButton() {
   if (mouseIsPressed && !lastMousePressed &&
       mouseX > closeX && mouseX < closeX + buttonSize &&
       mouseY > closeY && mouseY < closeY + buttonSize) {
-    if (currentScreen === "game") {
+    if (currentScreen === "customLocations") {
+      goToScreen("search");
+    } else if (currentScreen === "mapSettings") {
+      goToScreen("settings");
+    } else if (currentScreen === "game") {
       dropdownMenu.cleanup();
       resetLockStates();
-    } else if (currentScreen === "answer") {
-      dropdownMenu.cleanup();
-    } else if (currentScreen === "settings") {
-      settingsScreen.cleanup();
-    } else if (currentScreen === "permissions") {
-      permissionScreen.cleanup();
+      goToScreen("mainMenu");
+    } else {
+      if (currentScreen === "answer") {
+        dropdownMenu.cleanup();
+      } else if (currentScreen === "settings") {
+        settingsScreen.cleanup();
+      } else if (currentScreen === "permissions") {
+        permissionScreen.cleanup();
+      }
+      goToScreen("mainMenu");
     }
-    goToScreen("mainMenu");
     return true;
   }
   return false;
@@ -472,4 +495,28 @@ function getPermissionStatusColor(isGranted, isDark = document.documentElement.g
 
 function addDebugText(text) {
   debugText = text + "\n" + debugText.split("\n").slice(0, 10).join("\n");
+}
+
+function mouseWheel(event) {
+  if (customLocationsScreen.mouseWheel) {
+    customLocationsScreen.mouseWheel(event);
+  }
+}
+
+function touchStarted() {
+  if (customLocationsScreen.touchStarted) {
+    customLocationsScreen.touchStarted();
+  }
+}
+
+function touchMoved() {
+  if (customLocationsScreen.touchMoved) {
+    customLocationsScreen.touchMoved();
+  }
+}
+
+function touchEnded() {
+  if (customLocationsScreen.touchEnded) {
+    customLocationsScreen.touchEnded();
+  }
 }

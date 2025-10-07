@@ -85,8 +85,8 @@ let dropdownMenu = {
       textSize(20);
       let contentY = y + 80;
 
-      // Dataset selector for all screens except main menu and splash
-      if (!['mainMenu', 'splash'].includes(currentScreen)) {
+      // Dataset selector for specific screens
+      if (!['mainMenu', 'splash', 'search', 'customLocations'].includes(currentScreen)) {
         text("Dataset", x + 20, contentY);
         if (!this.datasetSelector) {
           this.createDatasetSelector(x + panelWidth - 170, contentY);
@@ -111,8 +111,28 @@ let dropdownMenu = {
         contentY += 100;
       }
       
+      // Add practice mode toggle for answer screen
+      if (currentScreen === 'answer') {
+        fill(getTextColor());
+        textAlign(LEFT);
+        text("Practice Mode", x + 20, contentY);
+        this.drawToggleSwitch(x + panelWidth - 70, contentY, 
+          () => userSettings.practiceMode,
+          (enabled) => {
+            userSettings.practiceMode = enabled;
+            // Reset input values when enabling practice mode
+            if (enabled) {
+              userGuessDistance = currentAnswer.guessDistance;
+              userGuessDirection = currentAnswer.guessDirection;
+            }
+          }
+        );
+        contentY += 60;
+      }
+      
       // Dark Mode Toggle always shown
       textAlign(LEFT);
+      fill(getTextColor());
       text("Dark Mode", x + 20, contentY);
       this.drawToggleSwitch(x + panelWidth - 70, contentY);
       
@@ -129,11 +149,15 @@ let dropdownMenu = {
   getPanelHeight(currentScreen) {
     switch(currentScreen) {
       case 'game':
-      case 'answer':
         return 280; 
+      case 'answer':
+        return 340; 
       case 'discoveries':
       case 'scores':
         return 180; 
+      case 'search':
+      case 'customLocations':
+        return 130;
       default:
         return 130; 
     }
@@ -201,35 +225,36 @@ let dropdownMenu = {
     }
   },
   
-  drawToggleSwitch(x, y) {
-    const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+  drawToggleSwitch(x, y, getValue = () => document.documentElement.getAttribute('data-theme') === 'dark', 
+                  onToggle = (enabled) => settingsScreen.setDarkMode(enabled)) {
+    const isEnabled = getValue();
     let toggleWidth = 50;
     let toggleHeight = 24;
     
     // Draw background
     noStroke();
-    fill(isDark ? getButtonColor() : '#cccccc');
+    fill(isEnabled ? getButtonColor() : '#cccccc');
     rect(x, y - toggleHeight/2, toggleWidth, toggleHeight, toggleHeight/2);
     
     // Draw knob
-    fill(isDark ? getTextColor() : '#ffffff');
+    fill(isEnabled ? getTextColor() : '#ffffff');
     let knobSize = toggleHeight - 4;
-    let knobX = isDark ? x + toggleWidth - knobSize - 2 : x + 2;
+    let knobX = isEnabled ? x + toggleWidth - knobSize - 2 : x + 2;
     circle(knobX + knobSize/2, y, knobSize);
     
     // Handle click
     if (mouseIsPressed && !lastMousePressed &&
         mouseX > x && mouseX < x + toggleWidth &&
         mouseY > y - toggleHeight/2 && mouseY < y + toggleHeight/2) {
-      settingsScreen.setDarkMode(!isDark);
+      onToggle(!isEnabled);
     }
   },
   
   createControls(currentScreen) {
     let contentY = 80;
     
-    // Create dataset selector for all screens except main menu and splash
-    if (!['mainMenu', 'splash'].includes(currentScreen)) {
+    // Create dataset selector for specific screens
+    if (!['mainMenu', 'splash', 'search', 'customLocations'].includes(currentScreen)) {
       this.createDatasetSelector(width - 170, contentY);
       contentY += 50;
     }

@@ -11,10 +11,13 @@ Main menu screen that provides:
 let mainMenuButtons = [
   {
     label: "Start Game", 
-    action: () => { startNewGame(); }
+    action: () => { 
+      enteredFromSearch = false;  // Reset the flag when starting from main menu
+      startNewGame(); 
+    }
   },
   {
-    label: "Custom Location",
+    label: "Add Locations",
     action: () => { goToScreen("search"); }
   },
   {
@@ -83,20 +86,29 @@ function drawMainMenuScreen() {
     
     push();
     imageMode(CENTER);
-    
-    
     push();
     
-    latDMS = convertToDMS(playerLocation.lat, 'N', 'S');
-    lonDMS = convertToDMS(playerLocation.lon, 'E', 'W');
-    
-    text(`${latDMS}   ${lonDMS}`, width/2, height/2);
+    // Only show coordinates if we have playerLocation
+    if (playerLocation) {
+      latDMS = convertToDMS(playerLocation.lat, 'N', 'S');
+      lonDMS = convertToDMS(playerLocation.lon, 'E', 'W');
+      text(`${latDMS}   ${lonDMS}`, width/2, height/2);
+    }
     
     translate(width/2, height/4);
     
-
+    // Use deltaTime for smoother animation
+    const bounceSpeed = 0.1;
+    const bounceAmount = 20;
     
-    translate(0, map(sin(millis()/10),-1,1,0,-20));
+    // Only bounce if we have a valid location
+    const hasValidLocation = playerLocation && 
+      (playerLocation.lat !== 0 || playerLocation.lon !== 0) &&
+      localStorage.getItem('locationPermission') === 'granted';
+      
+    if (hasValidLocation) {
+      translate(0, -bounceAmount * sin((millis() * bounceSpeed) % 360));
+    }
     
     if (document.documentElement.getAttribute('data-theme') === 'dark') {
       image(logoMarkerInverted, 0, 0, logoWidth, logoHeight);

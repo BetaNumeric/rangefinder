@@ -29,6 +29,13 @@ let mapSettingsScreen = {
     if (savedSettings) {
       this.settings = {...this.settings, ...JSON.parse(savedSettings) }; 
     }
+    
+    // Add cleanup on screen exit
+    if (drawCloseButton()) {
+      this.cleanup();
+      goToScreen("settings");  // Go back to settings instead of main menu
+      return;
+    }
   },
 
   saveSettings() {
@@ -85,8 +92,33 @@ let mapSettingsScreen = {
           featureType: "administrative.locality",
           elementType: "labels",
           stylers: [{ visibility: "on" }]
+        },
+        {
+          featureType: "water",
+          elementType: "labels",
+          stylers: [{ visibility: "on" }]
         }
       );
+    }
+
+    // Update label options in the selector
+    const labelOptions = [
+      { value: 'none', text: 'No Labels' },
+      { value: 'minimal', text: 'Cities & Waters' },
+      { value: 'all', text: 'All Labels' }
+    ];
+
+    // Update the selector if it exists
+    if (this.labelSelector) {
+      const select = this.labelSelector.querySelector('select');
+      select.innerHTML = '';
+      labelOptions.forEach(opt => {
+        const option = document.createElement('option');
+        option.value = opt.value;
+        option.text = opt.text;
+        select.appendChild(option);
+      });
+      select.value = this.settings.labelLevel;
     }
 
     // Roads visibility
@@ -208,8 +240,8 @@ let mapSettingsScreen = {
       select.style.fontSize = '16px';
       
       const labelOptions = [
-        { value: 'none', text: 'None' },
-        { value: 'minimal', text: 'Cities & Countries' },
+        { value: 'none', text: 'No Labels' },
+        { value: 'minimal', text: 'Cities & Waters' },
         { value: 'all', text: 'All Labels' }
       ];
       

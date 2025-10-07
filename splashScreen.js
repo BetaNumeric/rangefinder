@@ -38,7 +38,8 @@ function drawSplashScreen() {
     
     // Draw compass (rotating)
     push();
-    loadingState.rotation += 2; // Adjust speed by changing this value
+    // Use deltaTime for consistent rotation speed across devices
+    loadingState.rotation += (deltaTime / 50); // Adjust this value to control speed
     rotate(loadingState.rotation);
     if (document.documentElement.getAttribute('data-theme') === 'dark') {
       image(logoCompassInverted, 0, 0, logoWidth, logoHeight);
@@ -53,6 +54,7 @@ function drawSplashScreen() {
   // Show loading text with animated dots
   fill(getTextColor());
   textSize(24);
+  noStroke();
   textAlign(CENTER, CENTER);
   
   // Animate loading dots
@@ -63,7 +65,7 @@ function drawSplashScreen() {
   
   let dots = ".".repeat(loadingState.dots).padEnd(3);
   push();
-  text(loadingState.message + dots, width/2, height/2);
+  text(""+loadingState.message + dots, width/2, height/2);
   pop();
     
   // Start loading if not already started
@@ -71,7 +73,7 @@ function drawSplashScreen() {
     loadingState.started = true;
     
     // Load dataset
-    loadingState.message = "Loading";
+    loadingState.message = "V2.1 Loading";
     const selectedDataset = localStorage.getItem('selectedDataset') || 'global';
     dataLoader.loadQuestions(selectedDataset, (loadedQuestions) => {
       if (loadedQuestions && loadedQuestions.length > 0) {
