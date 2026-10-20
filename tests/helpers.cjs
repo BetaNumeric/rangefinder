@@ -11,7 +11,7 @@ function createHarness(files, overrides = {}) {
   const clock = { now: 100 };
   const window = new EventTarget();
   const document = {
-    documentElement: { getAttribute: () => 'light' },
+    documentElement: { getAttribute: () => 'light', setAttribute() {} },
     head: { appendChild(element) { element.attached = true; } },
     createElement(tag) {
       const elt = new EventTarget();
@@ -19,11 +19,13 @@ function createHarness(files, overrides = {}) {
         tagName: tag, style: {}, children: [],
         appendChild(child) { this.children.push(child); },
         setAttribute(name, value) { this[name] = value; },
+        click() { this.dispatchEvent(new Event('click')); },
         remove() { this.removed = true; }
       });
       return elt;
     }
   };
+  document.body = document.createElement('body');
   function element(label = '') {
     const result = {
       elt: document.createElement('div'), label, options: [], attributes: {},
@@ -50,7 +52,7 @@ function createHarness(files, overrides = {}) {
   const globals = {
     console: { log() {}, warn() {}, error() {} },
     window, document, MutationObserver,
-    URL, URLSearchParams, Request, Response, ReadableStream, Event, EventTarget,
+    URL, URLSearchParams, Request, Response, ReadableStream, Event, EventTarget, AbortController, Blob,
     setTimeout, clearTimeout, setInterval, clearInterval,
     performance: { now: () => clock.now },
     localStorage: {
@@ -62,7 +64,7 @@ function createHarness(files, overrides = {}) {
     CENTER: 'center', CORNER: 'corner', LEFT: 'left', RIGHT: 'right',
     BOLD: 'bold', NORMAL: 'normal', HAND: 'hand', AUTO: 'auto',
     mouseIsPressed: false, mouseX: 0, mouseY: 0,
-    createButton: element, createSelect: element, createDiv: element,
+    createButton: element, createSelect: element, createDiv: element, createFileInput: element,
     getCanvasOffset: () => ({ x: 0, y: 0 }),
     getTextColor: () => '#000000', getButtonColor: () => '#cccccc',
     getComputedStyle: () => ({ getPropertyValue: () => '#000000' }),
@@ -76,9 +78,13 @@ function createHarness(files, overrides = {}) {
   };
   const context = vm.createContext(globals);
   const run = code => vm.runInContext(code, context);
+  const loaded = new Set();
   function load(file) {
+    if (loaded.has(file)) return;
     vm.runInContext(fs.readFileSync(path.join(root, file), 'utf8'), context, { filename: file });
+    loaded.add(file);
   }
+  ['geoUtils.js', 'progressStore.js', 'scoringService.js'].forEach(load);
   files.forEach(load);
   return { context, run, load, stored, elements, observers, clock, window, document };
 }
@@ -94,6 +100,7 @@ function fakeGoogle() {
   class Overlay {
     constructor(options) { Object.assign(this, options); }
     setMap(map) { this.map = map; }
+    setPosition(position) { this.position = position; }
   }
   class LatLngBounds {
     constructor() { this.points = []; }

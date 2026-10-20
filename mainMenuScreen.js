@@ -43,37 +43,24 @@ let rotationState = {
 let locationUpdateInterval = null;
 
 function startLocationUpdates() {
-  // Clear any existing interval
-  if (locationUpdateInterval) {
-    clearInterval(locationUpdateInterval);
-  }
-  
-  locationUpdateInterval = setInterval(() => {
-    if ("geolocation" in navigator) {
-      navigator.geolocation.getCurrentPosition(
-        position => {
-          playerLocation = {
-            lat: position.coords.latitude,
-            lon: position.coords.longitude
-          };
-        },
-        error => console.error("Error updating location:", error),
-        { enableHighAccuracy: true }
-      );
-    }
-  }, 500);
+  if (locationUpdateInterval !== null || document.hidden ||
+      progressStore.getSetting('locationPermission') !== 'granted' || !navigator.geolocation) return;
+  locationUpdateInterval = navigator.geolocation.watchPosition(position => {
+    playerLocation = { lat: position.coords.latitude, lon: position.coords.longitude };
+  }, error => console.warn('Location update unavailable:', error),
+  { enableHighAccuracy: false, maximumAge: 10000, timeout: 15000 });
 }
 
 function stopLocationUpdates() {
-  if (locationUpdateInterval) {
-    clearInterval(locationUpdateInterval);
+  if (locationUpdateInterval !== null) {
+    navigator.geolocation.clearWatch(locationUpdateInterval);
     locationUpdateInterval = null;
   }
 }
 
 function drawMainMenuScreen() {
   // Start location updates when entering menu
-  if (!locationUpdateInterval) {
+  if (locationUpdateInterval === null) {
     startLocationUpdates();
   }
 
@@ -104,7 +91,7 @@ function drawMainMenuScreen() {
     // Only bounce if we have a valid location
     const hasValidLocation = playerLocation && 
       (playerLocation.lat !== 0 || playerLocation.lon !== 0) &&
-      localStorage.getItem('locationPermission') === 'granted';
+      progressStore.getSetting('locationPermission') === 'granted';
       
     if (hasValidLocation) {
       translate(0, -bounceAmount * sin((millis() * bounceSpeed) % 360));
@@ -167,18 +154,24 @@ function drawMainMenuScreen() {
   fill(getTextColor());
 
   let btnWidth = width/2;
-  let btnHeight = 60;
-  let startY = height/2+height/20;
+  const btnHeight = Math.max(44, Math.min(60, height * 0.08));
+  const gap = Math.max(10, Math.min(20, height * 0.025));
+  const stackHeight = mainMenuButtons.length * btnHeight + (mainMenuButtons.length - 1) * gap;
+  const startY = Math.min(height * 0.55, height - stackHeight - 16);
 
   for (let i = 0; i < mainMenuButtons.length; i++) {
     let x = width/2 - btnWidth/2;
-    let y = startY + i*(btnHeight+20);
+    let y = startY + i*(btnHeight+gap);
     
     drawInteractiveButton(
       x, y, btnWidth, btnHeight,
       mainMenuButtons[i].label,
       mainMenuButtons[i].action
     );
+  }
+  if (progressStore.notice) {
+    textSize(12);
+    text('Progress needs attention. Open Settings for details.', width/2, height - 8);
   }
 }
 

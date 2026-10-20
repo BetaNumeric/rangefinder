@@ -242,7 +242,7 @@ function drawGameScreen() {
     noStroke();
     textAlign(CENTER);
     textSize(16);
-    const currentDataset = localStorage.getItem('selectedDataset') || 'global';
+    const currentDataset = dataLoader.getSelectedDataset();
     const datasetName = dataLoader.datasets[currentDataset].name;
     const totalLocations = currentDataset === 'custom' ? 
       dataLoader.datasets.custom.locations.length : 
@@ -600,16 +600,14 @@ function submitGuess() {
     return;
   }
 
+  const origin = roundLocation || playerLocation;
   let correctDistance = calculateDistance(
-    playerLocation.lat, playerLocation.lon,
+    origin.lat, origin.lon,
     currentQuestion.lat, currentQuestion.lon
   );
 
-  // Round the correct distance using the shared utility
-  correctDistance = geoUtils.roundDistance(correctDistance);
-  
   let correctDirection = calculateBearing(
-    playerLocation.lat, playerLocation.lon,
+    origin.lat, origin.lon,
     currentQuestion.lat, currentQuestion.lon
   );
 
@@ -618,13 +616,17 @@ function submitGuess() {
     userGuessDistance,
     correctDirection,
     userGuessDirection,
-    playerLocation.lat,
-    playerLocation.lon,
+    origin.lat,
+    origin.lon,
     currentQuestion.lat,
     currentQuestion.lon
   );
 
   currentAnswer = {
+    locationName: currentQuestion.name,
+    country: currentQuestion.country,
+    type: currentQuestion.type,
+    dataset: progressStore.getSetting('selectedDataset', 'global'),
     correctDistance: correctDistance,
     correctDirection: correctDirection,
     guessDistance: userGuessDistance,
@@ -634,9 +636,10 @@ function submitGuess() {
     details: score.details,
     targetLat: currentQuestion.lat,
     targetLon: currentQuestion.lon,
-    playerLat: playerLocation.lat,
-    playerLon: playerLocation.lon
+    playerLat: origin.lat,
+    playerLon: origin.lon
   };
+  scoringService.saveScore(currentAnswer);
   goToScreen("answer");
 }
 
@@ -706,6 +709,7 @@ function pickNewQuestion() {
   if (!playerLocation) {
     playerLocation = { lat: 52.52, lon: 13.405 };
   }
+  roundLocation = { ...playerLocation };
   
   let possible = filterAndSortLocationsByDistance(
     questions, 
@@ -731,14 +735,14 @@ function pickNewQuestion() {
   let availableLocations = possible;
   if (possible.length > 1) {
     availableLocations = possible.filter(loc => 
-      currentQuestion ? loc.name !== currentQuestion.name : true
+      currentQuestion ? geoUtils.locationId(loc) !== geoUtils.locationId(currentQuestion) : true
     );
   }
   
   // Then try to avoid recently used locations if we have enough options
   if (availableLocations.length > RECENT_LOCATIONS_SIZE) {
     let nonRecentLocations = availableLocations.filter(loc => 
-      !recentLocations.includes(loc.name)
+      !recentLocations.includes(geoUtils.locationId(loc))
     );
     if (nonRecentLocations.length > 0) {
       availableLocations = nonRecentLocations;
@@ -750,8 +754,9 @@ function pickNewQuestion() {
   currentQuestion = availableLocations[randIndex];
   
   // Add to recent locations and remove oldest if needed
-  if (!recentLocations.includes(currentQuestion.name)) {
-    recentLocations.push(currentQuestion.name);
+  const locationId = geoUtils.locationId(currentQuestion);
+  if (!recentLocations.includes(locationId)) {
+    recentLocations.push(locationId);
     if (recentLocations.length > RECENT_LOCATIONS_SIZE) {
       recentLocations.shift();
     }

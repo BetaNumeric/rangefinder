@@ -120,9 +120,9 @@ let discoveryMap = {
           select.appendChild(option);
         });
 
-        select.value = localStorage.getItem('markerColorMode') || 'best';
+        select.value = progressStore.getSetting('markerColorMode', 'best');
         select.addEventListener('change', () => {
-          localStorage.setItem('markerColorMode', select.value);
+          progressStore.setSetting('markerColorMode', select.value);
           this.updateMarkers();
         });
 
@@ -132,7 +132,7 @@ let discoveryMap = {
         // Update map when settings change
         this.storageHandler = (e) => {
           if (e.key === 'mapSettings') {
-            const settings = JSON.parse(e.newValue || '{}');
+          const settings = progressStore.readJSON('mapSettings', {});
             mapSettingsScreen.settings = { ...mapSettingsScreen.settings, ...settings };
             this.map?.setMapTypeId(mapSettingsScreen.settings.satelliteView ? 'hybrid' : 'roadmap');
             this.map?.setOptions({ styles: mapSettingsScreen.getMapStyles() });
@@ -185,152 +185,82 @@ let discoveryMap = {
     }
   },
   
+  buildInfoContent(location, scores, averages, markerColor) {
+    const header = document.createElement('div');
+    header.textContent = location.name;
+    Object.assign(header.style, { color: getScoreHexForMap(markerColor).replace('0x', '#'), fontSize: '20px', fontWeight: 'bold' });
+    const content = document.createElement('div');
+    Object.assign(content.style, { maxWidth: '230px', color: 'var(--text-color)' });
+    const line = text => {
+      const paragraph = document.createElement('p');
+      paragraph.style.margin = '4px 0';
+      paragraph.textContent = text;
+      content.appendChild(paragraph);
+    };
+    line(location.country);
+    line('Best Score: ' + location.bestScore + '%');
+    line('Last Score: ' + location.lastScore + '%');
+    line('Average: ' + (averages.score === null ? '—' : averages.score + '%'));
+    line('Distance: ' + (averages.distance === null ? '—' : averages.distance + '%'));
+    line('Direction: ' + (averages.direction === null ? '—' : averages.direction + '%'));
+    line('Played: ' + location.plays + ' times');
+    if (scores.length) {
+      const latest = scores[0];
+      line('Last Attempt: ' + new Date(latest.timestamp).toLocaleString());
+      line('Guessed: ' + geoUtils.formatDistance(latest.distance.guess) + ', ' + Math.round(latest.direction.guess) % 360 + '°');
+      line('Actual: ' + geoUtils.formatDistance(latest.distance.actual) + ', ' + Math.round(latest.direction.actual) % 360 + '°');
+      line('Off by ' + geoUtils.formatDistance(latest.distance.error));
+    }
+    return { header, content };
+  },
+
   updateMarkers() {
-    // Clear existing markers and paths
-    this.markers.forEach(m => m.setMap(null));
+    this.markers.forEach(marker => marker.setMap(null));
+    this.paths.forEach(path => path.setMap(null));
     this.markers = [];
-    this.paths.forEach(p => p.setMap(null));
     this.paths = [];
-    
-    const currentDataset = localStorage.getItem('selectedDataset') || 'global';
-    const locations = scoringService.getDiscoveredLocations(currentDataset);
-    const scores = scoringService.getScores()
-      .filter(s => s.dataset === currentDataset);
-    
-    locations.forEach(loc => {
-      const locationScores = scores
-        .filter(s => s.locationName === loc.name)
-        .sort((a, b) => b.timestamp - a.timestamp);
-      
-      const avgScore = Math.round(
-        locationScores.reduce((sum, s) => sum + s.score, 0) / locationScores.length
-      );
-      
-      const avgDistanceScore = Math.round(
-        locationScores.reduce((sum, s) => sum + (s.distance ? s.distance.score : 0), 0) / locationScores.length
-      );
-      
-      const avgDirectionScore = Math.round(
-        locationScores.reduce((sum, s) => sum + (s.direction ? s.direction.score : 0), 0) / locationScores.length
-      );
-      
-      const colorMode = localStorage.getItem('markerColorMode') || 'best';
-      let markerColor;
-      switch(colorMode) {
-        case 'last': 
-          markerColor = loc.lastScore || 0;
-          break;
-        case 'average': 
-          markerColor = avgScore; 
-          break;
-        case 'distance': 
-          markerColor = avgDistanceScore; 
-          break;
-        case 'direction': 
-          markerColor = avgDirectionScore; 
-          break;
-        default: 
-          markerColor = loc.bestScore;
-      }
-      
+    if (!this.map) return;
+
+    const dataset = dataLoader.getSelectedDataset();
+    const locations = scoringService.getDiscoveredLocations(dataset);
+    const byLocation = new Map();
+    for (const score of scoringService.getScores()) {
+      if (score.dataset !== dataset) continue;
+      if (!byLocation.has(score.locationId)) byLocation.set(score.locationId, []);
+      byLocation.get(score.locationId).push(score);
+    }
+    const mode = progressStore.getSetting('markerColorMode', 'best');
+    for (const location of locations) {
+      const scores = (byLocation.get(location.id) || []).sort((a, b) => b.timestamp - a.timestamp);
+      const average = getter => scores.length ? Math.round(scores.reduce((sum, score) => sum + getter(score), 0) / scores.length) : null;
+      const averages = { score: average(score => score.score), distance: average(score => score.distance.score),
+        direction: average(score => score.direction.score) };
+      const choices = { best: location.bestScore, last: location.lastScore, average: averages.score,
+        distance: averages.distance, direction: averages.direction };
+      const markerColor = choices[mode] ?? location.lastScore;
       const marker = new google.maps.Marker({
-        position: { lat: loc.lat, lng: loc.lon },
-        map: this.map,
-        cursor: 'pointer',
-        icon: {
-          path: google.maps.SymbolPath.CIRCLE,
-          scale: 10,
-          fillColor: getScoreHexForMap(markerColor).replace('0x', '#'),
-          fillOpacity: 0.7,
-          strokeOpacity: 0.0,
+        position: { lat: location.lat, lng: location.lon }, map: this.map, cursor: 'pointer',
+        icon: { path: google.maps.SymbolPath.CIRCLE, scale: 10,
+          fillColor: getScoreHexForMap(markerColor).replace('0x', '#'), fillOpacity: 0.7, strokeOpacity: 0 }
+      });
+      const { header, content } = this.buildInfoContent(location, scores, averages, markerColor);
+      marker.addListener('click', () => {
+        this.paths.forEach(path => path.setMap(null));
+        this.paths = [];
+        this.infoWindow?.close();
+        this.infoWindow = new google.maps.InfoWindow({ content, headerContent: header, disableAutoPan: true });
+        this.infoWindow.open(this.map, marker);
+        for (const score of scores) {
+          this.paths.push(new google.maps.Polyline({
+            path: [{ lat: score.guess.calculatedPoint.lat, lng: score.guess.calculatedPoint.lon },
+              { lat: score.location.lat, lng: score.location.lon }],
+            geodesic: true, strokeColor: getScoreHexForMap(score.score).replace('0x', '#'),
+            strokeOpacity: 0.3, strokeWeight: 2, map: this.map
+          }));
         }
       });
-      
-      const headerElement = document.createElement('div');
-      headerElement.innerHTML = `
-        <header style="
-          color: ${getScoreHexForMap(markerColor).replace('0x', '#')};
-          padding: 0px;
-          font-size: 20px;
-          font-weight: bold;
-        ">
-          ${loc.name}
-        </header>
-      `;
-      
-      const contentString = `
-        <div style="
-          padding: 0px;
-          max-width: 200px;
-          color: var(--text-color);
-        ">
-          <p style="margin: 4px 0;">
-            ${loc.country}<br>
-            Best Score: <span style="color: ${getScoreHexForMap(loc.bestScore).replace('0x', '#')}">
-              ${loc.bestScore}%
-            </span><br>
-            Last Score: <span style="color: ${getScoreHexForMap(loc.lastScore).replace('0x', '#')}">
-              ${loc.lastScore}%
-            </span><br>
-            Average: ${avgScore}%<br>
-            Distance: ${avgDistanceScore || 0}%<br>
-            Direction: ${avgDirectionScore}%<br>
-            Played: ${loc.plays} times
-          </p>
-          ${locationScores.length > 0 ? `
-            <div style="margin-top: 8px; border-top: 1px solid var(--button-bg); padding-top: 8px;">
-              <strong>Last Attempt:</strong><br>
-              ${new Date(locationScores[0].timestamp).toLocaleString()}<br>
-              <span style="color: ${getScoreHexForMap(locationScores[0].score).replace('0x', '#')}">
-                ${locationScores[0].score}%
-              </span><br>
-              <small>
-                Guessed: ${Math.round(locationScores[0].distance.guess)}km ${Math.round(locationScores[0].direction.guess)}°
-                (${Math.round(locationScores[0].guess.calculatedPoint.lat * 100) / 100}, 
-                 ${Math.round(locationScores[0].guess.calculatedPoint.lon * 100) / 100})
-                <br>
-                Actual: ${Math.round(locationScores[0].distance.actual)}km ${Math.round(locationScores[0].direction.actual)}°
-              </small>
-            </div>
-          ` : ''}
-        </div>
-      `;
-      
-      marker.addListener('click', () => {
-        // Clear previous paths
-        this.paths.forEach(p => p.setMap(null));
-        this.paths = [];
-        
-        if (this.infoWindow) this.infoWindow.close();
-        this.infoWindow = new google.maps.InfoWindow({
-          content: contentString,
-          headerContent: headerElement,
-          disableAutoPan: true
-        });
-        this.infoWindow.open(this.map, marker);
-
-        // Draw paths for all attempts with decreasing opacity
-        locationScores.forEach((s, idx) => {
-          const guessPos = { 
-            lat: s.guess.calculatedPoint.lat, 
-            lng: s.guess.calculatedPoint.lon 
-          };
-          const targetPos = { lat: s.location.lat, lng: s.location.lon };
-
-          // Path from guess to actual location
-          this.paths.push(new google.maps.Polyline({
-            path: [guessPos, targetPos],
-            geodesic: true,
-            strokeColor: getScoreHexForMap(s.score).replace('0x', '#'),
-            strokeOpacity: Math.max(0.1, 0.8 - (idx * 0.1)),  
-            strokeWeight: Math.max(2, 5 - idx), 
-            map: this.map
-          }));
-        });
-      });
-      
       this.markers.push(marker);
-    });
+    }
   },
   
   remove() {
@@ -370,7 +300,7 @@ function drawDiscoveryMapScreen() {
   textSize(32);
   text("Discovered Locations", width/2, height/8);
   
-  const currentDataset = localStorage.getItem('selectedDataset') || 'global';
+  const currentDataset = dataLoader.getSelectedDataset();
   const locations = scoringService.getDiscoveredLocations(currentDataset);
   
   textSize(20);

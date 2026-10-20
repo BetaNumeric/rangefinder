@@ -12,7 +12,8 @@ let loadingState = {
   message: "Initializing...",
   dots: 0,
   lastDotUpdate: 0,
-  rotation: 0
+  rotation: 0,
+  error: false
 };
 
 function drawSplashScreen() {
@@ -77,32 +78,23 @@ function drawSplashScreen() {
   if (!loadingState.started) {
     loadingState.started = true;
     
-    // Preload all datasets
-    loadingState.message = `V${APP_VERSION} Loading all datasets`;
-    const selectedDataset = localStorage.getItem('selectedDataset') || 'global';
-    
-    dataLoader.preloadAllDatasets(() => {
-      // Set the selected dataset as the active one
-      const selectedData = dataLoader.cache[selectedDataset];
-      if (selectedData && selectedData.length > 0) {
-        questions = selectedData;
-        userSettings.radius = dataLoader.datasets[selectedDataset].defaultRadius;
-        
-        // Small delay to ensure everything is ready
-        setTimeout(() => {
-          loadingState = { 
-            started: false, 
-            progress: 0, 
-            message: "Initializing...", 
-            dots: 0, 
-            lastDotUpdate: 0,
-            rotation: 0 
-          };
-          goToScreen("mainMenu");
-        }, 500);
+    loadingState.error = false;
+    loadingState.message = `V${APP_VERSION} Loading locations`;
+    dataLoader.initialize(success => {
+      if (success) {
+        loadingState.started = false;
+        goToScreen('mainMenu');
       } else {
-        loadingState.message = "Error loading data";
+        loadingState.error = true;
+        loadingState.message = 'Locations are unavailable';
       }
     });
+  }
+  if (loadingState.error) {
+    drawInteractiveButton(width/2 - 75, height/2 + 65, 150, 46, 'Try Again', () => {
+      loadingState.started = false;
+      loadingState.error = false;
+    });
+    drawInteractiveButton(width/2 - 75, height/2 + 125, 150, 46, 'Settings', () => goToScreen('settings'));
   }
 }

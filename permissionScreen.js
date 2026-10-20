@@ -48,7 +48,7 @@ let permissionScreen = {
     
     // Update button colors but keep status indication
     if (this.locationButton) {
-      const isGranted = localStorage.getItem('locationPermission') === 'granted';
+      const isGranted = !!playerLocation && progressStore.getSetting('locationPermission') === 'granted';
       this.locationButton.style('background-color', getPermissionStatusColor(isGranted));
       this.locationButton.style('color', 'var(--text-color)');
       this.locationButton.style('font-family', 'Helvetica, Arial, sans-serif');
@@ -69,7 +69,7 @@ let permissionScreen = {
     
     // Only proceed to game if we have permissions and they were granted normally
     if (playerLocation && orientationService.hasCompass() && 
-        localStorage.getItem('locationPermission') === 'granted') {
+        progressStore.getSetting('locationPermission') === 'granted') {
       this.cleanup();
       currentQuestionIndex = 0;
       resetLockStates();
@@ -135,7 +135,7 @@ let permissionScreen = {
           playerLocation = { lat: 0, lon: 0 };
         }
         orientationService.hasPermission = true;
-        localStorage.setItem('compassPermission', 'granted');
+        progressStore.setSetting('compassPermission', 'granted');
         this.cleanup();
         currentQuestionIndex = 0;
         resetLockStates();
@@ -190,11 +190,11 @@ let permissionScreen = {
         navigator.geolocation.getCurrentPosition(
           position => {
             playerLocation = { lat: position.coords.latitude, lon: position.coords.longitude };
-            localStorage.setItem('locationPermission', 'granted');
+            progressStore.setSetting('locationPermission', 'granted');
             resolve(position);
           },
           error => {
-            localStorage.setItem('locationPermission', 'denied');
+            progressStore.setSetting('locationPermission', 'denied');
             reject(error);
           },
           { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }

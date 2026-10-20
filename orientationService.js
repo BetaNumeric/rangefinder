@@ -48,12 +48,12 @@ let orientationService = {
       const response = await OrientationEvent.requestPermission(true);
       if (response !== 'granted') {
         this.stop();
-        localStorage.setItem('compassPermission', 'denied');
+        progressStore.setSetting('compassPermission', 'denied');
         throw new Error('Compass access denied. Please check browser settings.');
       }
     }
     this.hasPermission = true;
-    localStorage.setItem('compassPermission', 'granted');
+    progressStore.setSetting('compassPermission', 'granted');
     if (this.hasCompass()) return true;
     return new Promise((resolve, reject) => {
       const notify = ready => {

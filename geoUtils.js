@@ -25,6 +25,17 @@ const geoUtils = {
    */
   EARTH_RADIUS_KM: 6371,
 
+  locationId(location) {
+    if (!Number.isFinite(location.lat) || !Number.isFinite(location.lon) ||
+        Math.abs(location.lat) > 90 || Math.abs(location.lon) > 180) {
+      throw new Error('Location coordinates are invalid.');
+    }
+    // Coordinate identity survives name changes and distinguishes namesakes.
+    const lat = Number(location.lat.toFixed(6));
+    const lon = Number((((location.lon + 540) % 360) - 180).toFixed(6));
+    return `geo:${lat.toFixed(6)}:${lon.toFixed(6)}`;
+  },
+
   /**
    * Calculates the great circle distance between two points using the Haversine formula
    * @param {number} lat1 - Latitude of point 1 in degrees
@@ -43,7 +54,8 @@ const geoUtils = {
               Math.cos(φ1) * Math.cos(φ2) *
               Math.sin(Δλ/2) * Math.sin(Δλ/2);
     
-    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+    const bounded = Math.min(1, Math.max(0, a));
+    const c = 2 * Math.atan2(Math.sqrt(bounded), Math.sqrt(1-bounded));
     
     return this.EARTH_RADIUS_KM * c;
   },
@@ -85,10 +97,10 @@ const geoUtils = {
     const φ1 = this.toRadians(lat);
     const λ1 = this.toRadians(lon);
     
-    const φ2 = Math.asin(
+    const φ2 = Math.asin(Math.max(-1, Math.min(1,
       Math.sin(φ1) * Math.cos(δ) +
       Math.cos(φ1) * Math.sin(δ) * Math.cos(θ)
-    );
+    )));
     
     const λ2 = λ1 + Math.atan2(
       Math.sin(θ) * Math.sin(δ) * Math.cos(φ1),
@@ -97,7 +109,7 @@ const geoUtils = {
     
     return {
       lat: this.toDegrees(φ2),
-      lon: this.toDegrees(λ2)
+      lon: ((this.toDegrees(λ2) + 540) % 360) - 180
     };
   },
 
@@ -136,6 +148,13 @@ const geoUtils = {
       }
     }
     return Math.round(distance);
+  },
+
+  formatDistance(distance) {
+    if (!Number.isFinite(distance) || distance < 0) return '—';
+    if (distance < 1) return Math.round(distance * 1000) + ' m';
+    const decimals = distance < 100 ? 2 : distance < 1000 ? 1 : 0;
+    return Number(distance.toFixed(decimals)).toLocaleString(undefined, { maximumFractionDigits: decimals }) + ' km';
   }
 };
 

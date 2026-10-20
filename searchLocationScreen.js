@@ -142,7 +142,7 @@ function drawSearchLocationScreen() {
         enteredFromSearch = true;
         resetLockStates();
         const ready = playerLocation && orientationService.hasCompass() &&
-          localStorage.getItem('locationPermission') === 'granted';
+          progressStore.getSetting('locationPermission') === 'granted';
         goToScreen(ready ? 'game' : 'permissions');
       });
     });

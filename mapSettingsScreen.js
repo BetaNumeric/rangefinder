@@ -25,9 +25,12 @@ let mapSettingsScreen = {
 
   initialize() {
     // Load saved settings
-    const savedSettings = localStorage.getItem('mapSettings');
-    if (savedSettings) {
-      this.settings = {...this.settings, ...JSON.parse(savedSettings) }; 
+    const savedSettings = progressStore.readJSON('mapSettings', {});
+    if (savedSettings && typeof savedSettings === 'object' && !Array.isArray(savedSettings)) {
+      for (const key of ['showLabels', 'showRoads', 'satelliteView', 'showPlayerLocation']) {
+        if (typeof savedSettings[key] === 'boolean') this.settings[key] = savedSettings[key];
+      }
+      if (['none', 'minimal', 'all'].includes(savedSettings.labelLevel)) this.settings.labelLevel = savedSettings.labelLevel;
     }
     
     // Add cleanup on screen exit
@@ -39,7 +42,7 @@ let mapSettingsScreen = {
   },
 
   saveSettings() {
-    localStorage.setItem('mapSettings', JSON.stringify(this.settings));
+    progressStore.setSetting('mapSettings', JSON.stringify(this.settings));
   },
 
   getMapStyles() {

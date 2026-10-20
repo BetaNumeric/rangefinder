@@ -31,6 +31,7 @@ let logoCompassInverted;
 let settingsIcon;
 let settingsIconInverted;
 let playerLocation = null;
+let roundLocation = null;
 let frameRates = [];
 const FRAMERATE_SAMPLES = 60;
 let lastMousePressed = false;
@@ -264,8 +265,11 @@ async function setup() {
   // Update HTML title with version
   document.title = `v${APP_VERSION} Rangefinder`;
 
-  // Set default player location
-  playerLocation = { lat: 0, lon: 0 };
+  // A fresh fix is required; (0,0) must never stand in for missing location data.
+  playerLocation = null;
+  orientationService.start();
+  frameRate(60);
+  angleMode(DEGREES);
 
   try {
     if (screen.orientation && screen.orientation.lock) {
@@ -277,29 +281,6 @@ async function setup() {
     // Expected on desktop browsers - orientation lock only works on mobile devices
     console.log("Orientation lock unavailable (normal on desktop):", error.message || error);
   }
-  
-  try {
-    if ("geolocation" in navigator) {
-      const position = await new Promise((resolve, reject) => {
-        navigator.geolocation.getCurrentPosition(resolve, reject, {
-          enableHighAccuracy: true,
-          timeout: 5000,
-          maximumAge: 0
-        });
-      });
-      playerLocation = {
-        lat: position.coords.latitude,
-        lon: position.coords.longitude
-      };
-      localStorage.setItem('locationPermission', 'granted');
-    }
-  } catch (error) {
-    console.warn("Initial permission request failed (user may be prompted later):", error.message || error);
-  }
-
-  orientationService.start();
-  frameRate(60);
-  angleMode(DEGREES);
   
   // Attach input listeners to the actual canvas element
   mainCanvasEl.addEventListener('touchstart', function(e) {
@@ -328,16 +309,26 @@ async function setup() {
   // Prevent long press (merged with touchstart above)
 
   // Initialize theme from localStorage (unified with settingsScreen.js)
-  const savedTheme = localStorage.getItem('theme');
+  const savedTheme = progressStore.getSetting('theme');
   const theme = savedTheme === 'dark' ? 'dark' : 'light';
   document.documentElement.setAttribute('data-theme', theme);
 
   // Set interactive map as default
-  if (localStorage.getItem('useInteractiveMap') === null) {
-    localStorage.setItem('useInteractiveMap', 'true');
+  if (progressStore.getSetting('useInteractiveMap') === null) {
+    progressStore.setSetting('useInteractiveMap', 'true');
   }
 
   mapSettingsScreen.initialize();
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) stopLocationUpdates();
+    else if (currentScreen === 'mainMenu' || currentScreen === 'game') startLocationUpdates();
+  });
+  window.addEventListener('storage', event => {
+    if (event.key !== progressStore.key) return;
+    progressStore.get(true);
+    dataLoader.syncCustomLocations(true);
+    if (currentScreen === 'discoveries' && discoveryMap.map) discoveryMap.updateMarkers();
+  });
 }
 
 function draw() {
@@ -428,9 +419,10 @@ function goToScreen(newScreen) {
   currentScreen = newScreen;
   
   // Start location updates when entering game screen
-  if (newScreen === "game") {
+  if (newScreen === 'game' && playerLocation) roundLocation = { ...playerLocation };
+  if (newScreen === 'game' || newScreen === 'mainMenu') {
     startLocationUpdates();
-  }
+  } else stopLocationUpdates();
 
   if (newScreen === "discoveries") {
     discoveryMap.remove();
@@ -480,6 +472,11 @@ function windowResized() {
 }
 
 function startNewGame() {
+  if (!questions.length || dataLoader.isLoading) {
+    loadingState.started = false;
+    goToScreen('splash');
+    return;
+  }
   if (DEV_MODE) {
     if (!playerLocation) {
       playerLocation = { lat: 52.52, lon: 13.405 };

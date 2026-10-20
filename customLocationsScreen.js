@@ -9,6 +9,7 @@ let customLocationsScreen = {
   scrollOffset: 0,
   maxScroll: 0,
   touchStart: 0,
+  touchStartOffset: 0,
   
   draw() {
 
@@ -35,6 +36,10 @@ let customLocationsScreen = {
     this.scrollOffset = constrain(this.scrollOffset, 0, this.maxScroll);
 
     // Draw locations
+    drawingContext.save();
+    drawingContext.beginPath();
+    drawingContext.rect(0, startY, width, visibleHeight);
+    drawingContext.clip();
     push();
     translate(0, -this.scrollOffset);
     
@@ -71,20 +76,18 @@ let customLocationsScreen = {
         text("X", deleteBtn.x + deleteBtn.w/2, deleteBtn.y + deleteBtn.h/2);
         
         // Handle delete click
-        if (mouseIsPressed && !lastMousePressed &&
+        if (mouseIsPressed && !lastMousePressed && mouseY >= startY &&
             mouseX > deleteBtn.x && mouseX < deleteBtn.x + deleteBtn.w &&
             mouseY > deleteBtn.y - this.scrollOffset && 
             mouseY < deleteBtn.y + deleteBtn.h - this.scrollOffset) {
           if (confirm(`Delete "${loc.name}"?`)) {
-            dataLoader.datasets.custom.locations.splice(index, 1);
-            localStorage.setItem('customLocations', 
-              JSON.stringify(dataLoader.datasets.custom.locations)
-            );
+            dataLoader.deleteCustomLocation(loc.id);
           }
         }
       }
     });
     pop();
+    drawingContext.restore();
 
     // Show scroll indicators if needed
     if (this.maxScroll > 0) {
@@ -103,10 +106,7 @@ let customLocationsScreen = {
     // Draw dropdown menu
     dropdownMenu.draw('customLocations');
     
-    if (drawCloseButton()) {
-      goToScreen("search");
-      return;
-    }
+    drawCloseButton();
 
   },
 
@@ -121,6 +121,7 @@ let customLocationsScreen = {
   touchStarted() {
     if (currentScreen === 'customLocations') {
       this.touchStart = mouseY;
+      this.touchStartOffset = this.scrollOffset;
       return false; // Prevent default
     }
   },
@@ -128,7 +129,7 @@ let customLocationsScreen = {
   touchMoved() {
     if (currentScreen === 'customLocations') {
       this.scrollOffset = constrain(
-        this.touchStart - mouseY,
+        this.touchStartOffset + this.touchStart - mouseY,
         0,
         this.maxScroll
       );

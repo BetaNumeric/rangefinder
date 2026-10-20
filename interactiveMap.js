@@ -143,6 +143,7 @@ let interactiveMap = {
     this.clearMap();
     
     const playerPos = { lat: answer.playerLat, lng: answer.playerLon };
+    this.playerMarker?.setPosition(playerPos);
     const targetPos = { lat: answer.targetLat, lng: answer.targetLon };
     const guessPos = computeDestinationLatLon(
       answer.playerLat,

@@ -178,13 +178,13 @@ let dropdownMenu = {
         }
       });
       
-      const currentDataset = localStorage.getItem('selectedDataset') || 'global';
+      const currentDataset = dataLoader.getSelectedDataset();
       // If current dataset is custom but empty, switch to global
       if (currentDataset === 'custom' && 
           (!dataLoader.datasets.custom.locations || 
            dataLoader.datasets.custom.locations.length === 0)) {
-        localStorage.setItem('selectedDataset', 'global');
-        this.datasetSelector.selected('global');
+        progressStore.setSetting('selectedDataset', 'capitals');
+        this.datasetSelector.selected('capitals');
       } else {
         this.datasetSelector.selected(currentDataset);
       }
@@ -320,7 +320,7 @@ let dropdownMenu = {
       
       this.radiusSlider.input(() => {
         let sVal = this.radiusSlider.value();
-        userSettings.radius = getRoundedRadiusFromSlider(sVal);
+        dataLoader.setRadius(getRoundedRadiusFromSlider(sVal));
       });
       
       this.radiusSlider.position(20 + offset.x, 150);

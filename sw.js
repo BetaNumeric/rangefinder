@@ -3,7 +3,7 @@ const CACHE_PREFIX = `rangefinder-${encodeURIComponent(new URL(self.registration
 const CACHE_NAME = `${CACHE_PREFIX}__BUILD_ID__`;
 const FILES_TO_CACHE = [
   './', 'index.html', 'config.js', 'mapsApi.js', 'manifest.json', 'a2hs.js',
-  'main.js', 'geoUtils.js', 'answerScreen.js', 'customLocationsScreen.js',
+  'main.js', 'geoUtils.js', 'progressStore.js', 'answerScreen.js', 'customLocationsScreen.js',
   'dataLoader.js', 'discoveryMapScreen.js', 'dropdownMenu.js', 'gameScreen.js',
   'interactiveMap.js', 'mainMenuScreen.js', 'mapSettingsScreen.js',
   'orientationService.js', 'permissionScreen.js', 'scoringService.js',
