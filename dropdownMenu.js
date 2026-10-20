@@ -171,56 +171,18 @@ let dropdownMenu = {
       this.datasetSelector.style('width', '150px');
       
       Object.entries(dataLoader.datasets).forEach(([key, dataset]) => {
-        // Only show custom dataset if it has locations
-        if (key !== 'custom' || 
-           (dataset.locations && dataset.locations.length > 0)) {
-          this.datasetSelector.option(dataset.name, key);
-        }
+        this.datasetSelector.option(dataset.name, key);
       });
       
       const currentDataset = localStorage.getItem('selectedDataset') || 'global';
-      // If current dataset is custom but empty, switch to global
-      if (currentDataset === 'custom' && 
-          (!dataLoader.datasets.custom.locations || 
-           dataLoader.datasets.custom.locations.length === 0)) {
-        localStorage.setItem('selectedDataset', 'global');
-        this.datasetSelector.selected('global');
-      } else {
-        this.datasetSelector.selected(currentDataset);
-      }
+      this.datasetSelector.selected(currentDataset);
       
-      this.datasetSelector.changed(() => {
-        if (this.isChangingDataset) return;
-        this.isChangingDataset = true;
-        
-        localStorage.setItem('selectedDataset', this.datasetSelector.value());
+      this.datasetSelector.changed(async () => {
         const newDataset = this.datasetSelector.value();
-        
-        // Clear recent locations when changing datasets
-        recentLocations = [];
-        
-        // Update max range based on dataset
-        userSettings.radius = dataLoader.datasets[newDataset].defaultRadius;
-        
-        // Clean up dropdown immediately when loading starts
         this.cleanup();
-        
-        // Reload questions
-        dataLoader.loadQuestions(newDataset, (loadedQuestions) => {
-          console.log("Dataset changed, loading new questions");
-          if (loadedQuestions && loadedQuestions.length > 0) {
-            questions = loadedQuestions;
-            if (currentScreen === 'game' || currentScreen === 'answer') {
-              console.log("About to call pickNewQuestion from dataset change");
-              pickNewQuestion();
-            }
-          }
-          
-          // Update views that need refreshing
-          if (currentScreen === 'discoveries') {
-            discoveryMap.updateMarkers();
-          }
-        });
+        if (!await dataLoader.selectDataset(newDataset) && !dataLoader.isLoading && dataLoader.error) {
+          alert(dataLoader.error);
+        }
       });
     }
   },

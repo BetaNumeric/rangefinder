@@ -1,219 +1,134 @@
-// permissionScreen.js
-/*
-Permission management screen that handles:
-- Location permission requests
-- Compass permission requests
-- Permission status display
-- Fallback options
-*/
-/*jshint esversion: 8 */
-
 let permissionScreen = {
-  needsLocation: true,
-  needsCompass: true,
-  message: "",
-  compassButton: null,
+  message: '',
   locationButton: null,
+  compassButton: null,
   continueButton: null,
-  
-  draw: function() {
-    if (DEV_MODE) {
-      startNewGame();
-      return;
-    }
-    if (drawCloseButton()) {
-      this.cleanup();
-      return;
-    }
-    
-    // Title
+  generation: 0,
+
+  draw() {
+    if (drawCloseButton()) return;
     textAlign(CENTER, CENTER);
     noStroke();
-    textSize(32);
     fill(getTextColor());
-    text("Permissions Needed", width/2, height/6);
-    
+    textSize(30);
+    text('Location and compass', width / 2, height / 6);
+    textSize(16);
     if (window.isSecureContext) {
-      // Subtitle
-      textSize(20);
-      fill(getTextColor());
-      text("This game needs access to:", width/2, height/3 - 40);
+      text('Enable location, then choose your controls.', width / 2, height / 3 - 40);
       this.createButtons();
+      this.positionButtons();
     } else {
-      textSize(20);
-      fill(255, 0, 0);
-      text("This game requires a secure connection (HTTPS).", width/2, height/3);
-      text("Please use HTTPS or localhost to play.", width/2, height/3 + 30);
+      text('Open this game over HTTPS or localhost.', width / 2, height / 3);
     }
-    
-    // Update button colors but keep status indication
     if (this.locationButton) {
-      const isGranted = localStorage.getItem('locationPermission') === 'granted';
-      this.locationButton.style('background-color', getPermissionStatusColor(isGranted));
-      this.locationButton.style('color', 'var(--text-color)');
-      this.locationButton.style('font-family', 'Helvetica, Arial, sans-serif');
+      this.locationButton.style('background-color', getPermissionStatusColor(hasValidPlayerLocation()));
+      this.compassButton.style('background-color', getPermissionStatusColor(orientationService.hasCompass()));
     }
-    if (this.compassButton) {
-      const isGranted = orientationService.hasPermission;
-      this.compassButton.style('background-color', getPermissionStatusColor(isGranted));
-      this.compassButton.style('color', 'var(--text-color)');
-      this.compassButton.style('font-family', 'Helvetica, Arial, sans-serif');
+    let status = this.message;
+    if (!status && orientationService.hasPermission && !orientationService.hasCompass()) {
+      status = 'Waiting for a compass reading.\nYou can also use manual controls.';
     }
-      
-    if (this.message) {
-      textSize(16);
-      fill(255, 0, 0);
-      textAlign(CENTER, CENTER);
-      text(this.message, width/2, height - 100);
-    }
-    
-    // Only proceed to game if we have permissions and they were granted normally
-    if (playerLocation && orientationService.hasPermission && 
-        localStorage.getItem('locationPermission') === 'granted') {
-      this.cleanup();
-      currentQuestionIndex = 0;
-      resetLockStates();
-      pickNewQuestion();
-      goToScreen("game");
-    }
+    if (status) text(status, width / 2, height * 0.78);
+    if (!dataLoader.isLoading && hasValidPlayerLocation() && orientationService.hasCompass()) this.finish(false);
   },
 
-  createButtons: function() {
-    const centerY = height/2 - 75; // Center point for buttons
-    const spacing = 70; // Space between buttons
-    
-    if (this.needsLocation && !this.locationButton) {
-      this.locationButton = createButton('Location');
-      this.styleButton(this.locationButton, centerY);
-      this.locationButton.mousePressed(async () => {
-        this.locationButton.attribute('disabled', '');
-        try {
-          const position = await this.requestLocation();
-          playerLocation = {
-            lat: position.coords.latitude,
-            lon: position.coords.longitude
-          };
-          this.message = "";
-          this.locationButton.removeAttribute('disabled');
-        } catch (error) {
-          this.locationButton.removeAttribute('disabled');
-          this.message = "Location access denied. Please check browser settings.";
-        }
-      });
+  finish(manualControls) {
+    if (!hasValidPlayerLocation()) {
+      this.message = 'Enable location to start a round.';
+      return;
     }
-
-    if (this.needsCompass && !this.compassButton) {
-      this.compassButton = createButton('Compass');
-      this.styleButton(this.compassButton, centerY + spacing);
-      this.compassButton.mousePressed(async () => {
-        this.compassButton.attribute('disabled', '');
-        this.compassButton.style('opacity', '0.5');
-        
-        try {
-          if (typeof DeviceOrientationEvent.requestPermission === 'function') {
-            await new Promise(resolve => setTimeout(resolve, 100));
-            const response = await DeviceOrientationEvent.requestPermission();
-            if (response === 'granted') {
-              orientationService.hasPermission = true;
-              localStorage.setItem('compassPermission', 'granted');
-              window.addEventListener('deviceorientation', orientationService.handleOrientation.bind(orientationService), 
-                { capture: true, passive: true }
-              );
-              this.message = "";
-            } else {
-              throw new Error("Permission denied");
-            }
-          } else {
-            orientationService.hasPermission = true;
-            localStorage.setItem('compassPermission', 'granted');
-          }
-        } catch (error) {
-          this.message = "Please try again or check browser settings";
-        }
-        this.compassButton.removeAttribute('disabled');
-        this.compassButton.style('opacity', '1');
-      });
+    if (dataLoader.isLoading) {
+      this.message = 'Wait for the locations to finish loading.';
+      return;
     }
-
-    if (!this.continueButton && DEV_MODE) {
-      this.continueButton = createButton('Start without access');
-      this.styleButton(this.continueButton, centerY + spacing * 2);
-      this.continueButton.style('background-color', 'var(--button-bg)');
-      this.continueButton.style('color', 'var(--text-color)');
-      this.continueButton.mousePressed(() => {
-        if (!playerLocation) {
-          playerLocation = { lat: 0, lon: 0 };
-        }
-        orientationService.hasPermission = true;
-        localStorage.setItem('compassPermission', 'granted');
-        this.cleanup();
-        currentQuestionIndex = 0;
-        resetLockStates();
-        pickNewQuestion();
-        goToScreen("game");  // Continue directly to game
-      });
-    }
+    userSettings.manualControls = manualControls;
+    if (pendingCustomQuestion) {
+      const distance = getDistanceKm(playerLocation.lat, playerLocation.lon,
+        pendingCustomQuestion.lat, pendingCustomQuestion.lon);
+      userSettings.radius = Math.min(20000, Math.max(userSettings.radius, Math.ceil(distance)));
+      beginRound(pendingCustomQuestion, 'custom');
+      pendingCustomQuestion = null;
+    } else pickNewQuestion();
+    goToScreen('game');
   },
 
-  styleButton: function(button, yPosition) {
-    const offset = getCanvasOffset();
-    const btnWidth = 200;
-    
+  createButtons() {
+    if (this.locationButton) return;
+    this.locationButton = createButton('Enable location');
+    this.compassButton = createButton('Enable compass');
+    this.continueButton = createButton('Use manual controls');
+    [this.locationButton, this.compassButton, this.continueButton].forEach(button => this.styleButton(button));
+    this.locationButton.mousePressed(async () => {
+      const generation = this.generation;
+      const button = this.locationButton;
+      button.attribute('disabled', '');
+      try {
+        await this.requestLocation();
+        if (generation === this.generation) this.message = '';
+      } catch (error) {
+        if (generation === this.generation) this.message = 'Location unavailable. Check access and try again.';
+      } finally { button.removeAttribute('disabled'); }
+    });
+    this.compassButton.mousePressed(async () => {
+      const generation = this.generation;
+      const button = this.compassButton;
+      button.attribute('disabled', '');
+      try {
+        const granted = await orientationService.requestPermission();
+        if (generation === this.generation) this.message = granted ? '' :
+          'No compass reading yet. Try again or use manual controls.';
+      } catch (error) {
+        if (generation === this.generation) this.message = 'Compass access unavailable. You can use manual controls.';
+      } finally { button.removeAttribute('disabled'); }
+    });
+    this.continueButton.mousePressed(() => this.finish(true));
+  },
+
+  styleButton(button) {
+    button.size(220, 50);
     button.style('font-size', '18px');
-    button.style('padding', '8px');
     button.style('border', 'none');
     button.style('border-radius', '10px');
-    button.style('cursor', 'pointer');
-    button.style('width', btnWidth + 'px');
-    button.style('height', '50px');
-    button.style('touch-action', 'auto');
-    button.style('pointer-events', 'auto');
+    button.style('background-color', 'var(--button-bg)');
+    button.style('color', 'var(--text-color)');
     button.style('z-index', '1000');
-    button.style('font-family', 'Helvetica, Arial, sans-serif');
-    button.style('transition', 'opacity 0.2s');
-    
-    button.position(width/2 - btnWidth/2 + offset.x, yPosition);
-    
-    button.elt.addEventListener('touchstart', function(e) {
-      e.stopPropagation();
-    }, { passive: true });
+    button.style('touch-action', 'manipulation');
   },
 
-  cleanup: function() {
-    if (this.locationButton) {
-      this.locationButton.remove();
-      this.locationButton = null;
-    }
-    if (this.compassButton) {
-      this.compassButton.remove();
-      this.compassButton = null;
-    }
-    if (this.continueButton) {
-      this.continueButton.remove();
-      this.continueButton = null;
-    }
-  },
-  
-  requestLocation() {
-    return new Promise((resolve, reject) => {
-      if ("geolocation" in navigator) {
-        navigator.geolocation.getCurrentPosition(
-          position => {
-            localStorage.setItem('locationPermission', 'granted');
-            resolve(position);
-          },
-          error => {
-            localStorage.setItem('locationPermission', 'denied');
-            reject(error);
-          }
-        );
-      } else {
-        reject(new Error("Geolocation not available"));
-      }
+  positionButtons() {
+    const offset = getCanvasOffset();
+    [this.locationButton, this.compassButton, this.continueButton].forEach((button, i) => {
+      if (button) button.position(offset.x + width / 2 - 110, height / 2 - 75 + i * 70);
     });
   },
 
-  handleClick: function() {
-    // Called from mousePressed in main.js if needed
-  }
+  requestLocation() {
+    const generation = this.generation;
+    return new Promise((resolve, reject) => {
+      if (!navigator.geolocation) { reject(new Error('Geolocation unavailable.')); return; }
+      navigator.geolocation.getCurrentPosition(position => {
+        if (generation !== this.generation) { reject(new Error('Location request cancelled.')); return; }
+        try {
+          updatePlayerLocation(position);
+          updateSensorSubscriptions();
+          resolve(position);
+        } catch (error) { reject(error); }
+      }, error => {
+        if (generation === this.generation && error.code === 1) {
+          playerLocation = null;
+          localStorage.setItem('locationPermission', 'denied');
+        }
+        reject(error);
+      }, { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 });
+    });
+  },
+
+  cleanup() {
+    this.generation++;
+    [this.locationButton, this.compassButton, this.continueButton].forEach(button => { if (button) button.remove(); });
+    this.locationButton = this.compassButton = this.continueButton = null;
+    this.message = '';
+  },
+
+  handleClick() {}
 };

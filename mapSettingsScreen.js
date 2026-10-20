@@ -179,6 +179,11 @@ let mapSettingsScreen = {
       this.cleanup();
       return;
     }
+    if (!mapsApi.isReady()) {
+      this.cleanup();
+      drawMapStatus(0, height / 4, width, height / 2);
+      return;
+    }
 
     fill(getTextColor());
     noStroke();

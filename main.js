@@ -15,6 +15,8 @@ let currentQuestionIndex = 0;
 let userGuessDistance = 0;
 let userGuessDirection = 0; 
 let currentQuestion = null;
+let currentRound = null;
+let pendingCustomQuestion = null;
 let compassRose;
 let compassRoseInverted;
 let compassArrow;
@@ -37,12 +39,8 @@ let enteredFromSearch = false;
 
 let userSettings = {
   radius: 2000,
-  practiceMode: false
-};
-
-window.initMap = function() {
-  console.log("Google Maps API loaded");
-  interactiveMap.isLoaded = true;
+  practiceMode: false,
+  manualControls: false
 };
 
 function preload() {
@@ -160,7 +158,7 @@ function preload() {
 
 }
 
-async function setup() {
+function setup() {
   // Calculate canvas size to maintain portrait orientation
   let canvasWidth = windowWidth;
   let canvasHeight = windowHeight;
@@ -175,12 +173,11 @@ async function setup() {
   
   textAlign(CENTER, CENTER);
 
-  // Set default player location
-  playerLocation = { lat: 0, lon: 0 };
+  dataLoader.initialize();
 
   try {
     if (screen.orientation && screen.orientation.lock) {
-      await screen.orientation.lock('portrait');
+      screen.orientation.lock('portrait').catch(error => console.log('Could not lock orientation:', error));
     } else if (screen.lockOrientation) {
       screen.lockOrientation('portrait');
     }
@@ -188,32 +185,7 @@ async function setup() {
     console.log("Could not lock orientation:", error);
   }
   
-  try {
-    if ("geolocation" in navigator) {
-      const position = await new Promise((resolve, reject) => {
-        navigator.geolocation.getCurrentPosition(resolve, reject, {
-          enableHighAccuracy: true,
-          timeout: 5000,
-          maximumAge: 0
-        });
-      });
-      playerLocation = {
-        lat: position.coords.latitude,
-        lon: position.coords.longitude
-      };
-      localStorage.setItem('locationPermission', 'granted');
-    }
-    if (typeof DeviceOrientationEvent.requestPermission === 'function') {
-      const response = await DeviceOrientationEvent.requestPermission();
-      if (response === 'granted') {
-        orientationService.hasPermission = true;
-        localStorage.setItem('compassPermission', 'granted');
-      }
-    }
-  } catch (error) {
-    console.error("Error requesting initial permissions:", error);
-  }
-
+  // Native permission requests belong to the permission buttons, not startup.
   orientationService.start();
   frameRate(60);
   angleMode(DEGREES);
@@ -249,7 +221,8 @@ async function setup() {
   }, { passive: false });
 
   // Initialize dark mode from localStorage
-  const darkMode = localStorage.getItem('darkMode') === 'enabled';
+  const darkMode = localStorage.getItem('theme') === 'dark' ||
+    (localStorage.getItem('theme') === null && localStorage.getItem('darkMode') === 'enabled');
   document.documentElement.setAttribute('data-theme', darkMode ? 'dark' : 'light');
 
   // Set interactive map as default
@@ -323,6 +296,7 @@ function draw() {
 }
 
 function goToScreen(newScreen) {
+  stopLocationUpdates();
   // Cleanup previous screen
   if (currentScreen === "answer") {
     cleanupAnswerScreen();
@@ -332,21 +306,37 @@ function goToScreen(newScreen) {
     discoveryMap.remove();
   } else if (currentScreen === "search") {
     searchLocationScreen.cleanup();
+  } else if (currentScreen === "permissions") {
+    permissionScreen.cleanup();
+    if (newScreen !== 'game') pendingCustomQuestion = null;
+  } else if (currentScreen === "mapSettings") {
+    mapSettingsScreen.cleanup();
   }
   
   dropdownMenu.onScreenExit();
   
   currentScreen = newScreen;
   
-  // Start location updates when entering game screen
-  if (newScreen === "game") {
-    startLocationUpdates();
-  }
-
-  if (newScreen === "discoveries") {
-    discoveryMap.remove();
-  }
+  updateSensorSubscriptions();
 }
+
+function hasValidPlayerLocation() {
+  return !!playerLocation && Number.isFinite(playerLocation.lat) && Math.abs(playerLocation.lat) <= 90 &&
+    Number.isFinite(playerLocation.lon) && Math.abs(playerLocation.lon) <= 180 &&
+    Number.isFinite(playerLocation.timestamp) && Date.now() - playerLocation.timestamp < 60000;
+}
+
+function updateSensorSubscriptions() {
+  const active = !document.hidden && ['mainMenu', 'permissions', 'game', 'answer'].includes(currentScreen);
+  if (active) orientationService.start();
+  else orientationService.stop();
+  if (active && currentScreen !== 'answer' && localStorage.getItem('locationPermission') === 'granted') {
+    startLocationUpdates();
+  } else stopLocationUpdates();
+}
+
+document.addEventListener('visibilitychange', updateSensorSubscriptions);
+window.addEventListener('pagehide', () => { stopLocationUpdates(); orientationService.stop(); });
 
 function mousePressed() {
   if (currentScreen === "permissions") {
@@ -370,18 +360,19 @@ function windowResized() {
   }
   
   resizeCanvas(canvasWidth, canvasHeight);
-  let offset = getCanvasOffset(); 
+  mapInitialized = false;
+  if (currentScreen === 'permissions') permissionScreen.positionButtons();
 }
 
-function startNewGame() {
+function startNewGame(customQuestion = null) {
+  pendingCustomQuestion = customQuestion;
+  userSettings.manualControls = false;
   console.log("Starting new game");
   if (DEV_MODE) {
     if (!playerLocation) {
-      playerLocation = { lat: 52.52, lon: 13.405 };
+      playerLocation = { lat: 52.52, lon: 13.405, timestamp: Date.now() };
     }
-    if (!orientationService.hasPermission) {
-      orientationService.hasPermission = true;
-    }
+    userSettings.manualControls = true;
     currentQuestionIndex = 0;
     resetLockStates();
     console.log("About to call pickNewQuestion from startNewGame");

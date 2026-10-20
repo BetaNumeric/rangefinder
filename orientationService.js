@@ -1,163 +1,95 @@
-// orientationService.js
-/*
-Device orientation handling service that manages:
-- Compass readings
-- Device orientation permissions
-- Heading calculations
-- Motion filtering
-*/
-
+// Permission and usable compass readings are separate states.
 let orientationService = {
   alpha: 0,
-  beta: 0,
-  gamma: 0,
+  beta: null,
+  gamma: null,
   heading: 0,
   hasPermission: false,
-  isWebkit: false,
+  hasReading: false,
+  isListening: false,
   lastUpdate: 0,
+  lastHeadingAt: null,
   updateInterval: 33,
   filterFactor: 0.3,
-  filteredHeading: 0,
-  
-  start: function() {
-    if (!window.DeviceOrientationEvent) {
-      console.error("Device orientation not supported");
-      return;
-    }
-    this.isWebkit = typeof DeviceOrientationEvent.requestPermission === 'function';
+  filteredHeading: null,
+  maxReadingAge: 3000,
+  handler: null,
 
-    if (this.isWebkit) {
-      let storedPermission = localStorage.getItem('compassPermission');
-      if (storedPermission === 'granted') {
-        let testListener = (event) => {
-          if (event.alpha !== null || event.webkitCompassHeading !== undefined) {
-            this.hasPermission = true;
-            window.addEventListener('deviceorientation', this.handleOrientation.bind(this), 
-              { capture: true, passive: true }
-            );
-          } else {
-            localStorage.removeItem('compassPermission');
-            this.hasPermission = false;
-          }
-          window.removeEventListener('deviceorientation', testListener);
-        };
-        window.addEventListener('deviceorientation', testListener, { once: true });
-        setTimeout(() => {
-          window.removeEventListener('deviceorientation', testListener);
-          if (!this.hasPermission) {
-            localStorage.removeItem('compassPermission');
-          }
-        }, 1000);
-      }
-      return;
-    }
-
-    let testListener = (event) => {
-      if (event.alpha !== null) {
-        this.hasPermission = true;
-        localStorage.setItem('compassPermission', 'granted');
-      } else {
-        localStorage.removeItem('compassPermission');
-        this.hasPermission = false;
-      }
-      window.removeEventListener('deviceorientationabsolute', testListener);
-      window.removeEventListener('deviceorientation', testListener);
-      
-      if (this.hasPermission) {
-        window.addEventListener('deviceorientationabsolute', this.handleOrientation.bind(this), 
-          { capture: true, passive: true }
-        );
-        window.addEventListener('deviceorientation', this.handleOrientation.bind(this), 
-          { capture: true, passive: true }
-        );
-      }
-    };
-
-    window.addEventListener('deviceorientationabsolute', testListener, { once: true });
-    window.addEventListener('deviceorientation', testListener, { once: true });
+  start() {
+    if (!window.DeviceOrientationEvent || this.isListening) return;
+    if (!this.handler) this.handler = this.handleOrientation.bind(this);
+    window.addEventListener('deviceorientationabsolute', this.handler, { passive: true });
+    window.addEventListener('deviceorientation', this.handler, { passive: true });
+    this.isListening = true;
   },
 
-  requestPermission: async function() {
-    if (this.isWebkit) {
-      try {
-        const response = await DeviceOrientationEvent.requestPermission();
-        if (response === 'granted') {
-          this.hasPermission = true;
-          localStorage.setItem('compassPermission', 'granted');
-          window.addEventListener('deviceorientation', this.handleOrientation.bind(this), true);
-          return true;
-        } else {
-          localStorage.setItem('compassPermission', 'denied');
-          console.error("Permission denied for device orientation");
-          return false;
-        }
-      } catch (error) {
-        console.error("Error requesting device orientation permission:", error);
-        throw error;
-      }
-    } else if (window.DeviceOrientationEvent) {
-      this.hasPermission = true;
-      window.addEventListener('deviceorientationabsolute', this.handleOrientation.bind(this), true);
-      window.addEventListener('deviceorientation', this.handleOrientation.bind(this), true);
-      return true;
+  stop() {
+    if (this.handler) {
+      window.removeEventListener('deviceorientationabsolute', this.handler);
+      window.removeEventListener('deviceorientation', this.handler);
     }
-    return this.hasPermission;
+    this.isListening = false;
+    this.hasReading = false;
+    this.lastHeadingAt = null;
+    this.filteredHeading = null;
+    this.beta = null;
+    this.gamma = null;
   },
 
-  handleOrientation: function(event) {
-    const now = performance.now();
-    if (now - this.lastUpdate < this.updateInterval) {
-      return;
+  async requestPermission() {
+    const orientationEvent = window.DeviceOrientationEvent;
+    if (!orientationEvent) return false;
+    this.start();
+    if (typeof orientationEvent.requestPermission === 'function') {
+      // Keep the native request directly in the button's user-activation call stack.
+      const response = await orientationEvent.requestPermission(true);
+      this.hasPermission = response === 'granted';
+      localStorage.setItem('compassPermission', response);
+      if (!this.hasPermission) this.stop();
+      return this.hasPermission;
     }
-    this.lastUpdate = now;
+    // Browsers without a permission method must still deliver an absolute reading.
+    return this.hasCompass();
+  },
 
-    if (event.absolute) {
-      this.alpha = event.alpha || 0;
-    } else if (event.webkitCompassHeading !== undefined) {
-      this.alpha = event.webkitCompassHeading;
-    }
+  handleOrientation(event) {
+    if (Number.isFinite(event.beta)) this.beta = event.beta;
+    if (Number.isFinite(event.gamma)) this.gamma = event.gamma;
 
-    this.beta = event.beta || 0;
-    this.gamma = event.gamma || 0;
-    const newHeading = this.calculateTrueHeading();
-
-    if (this.filteredHeading === 0) {
-      this.filteredHeading = newHeading;
+    let newHeading;
+    if (Number.isFinite(event.webkitCompassHeading) && event.webkitCompassHeading >= 0 &&
+        !(Number.isFinite(event.webkitCompassAccuracy) && event.webkitCompassAccuracy < 0)) {
+      newHeading = event.webkitCompassHeading;
+    } else if (event.absolute === true && Number.isFinite(event.alpha)) {
+      newHeading = 360 - event.alpha;
     } else {
-      let diff = newHeading - this.filteredHeading;
-      if (diff > 180) diff -= 360;
-      if (diff < -180) diff += 360;
-      this.filteredHeading = (this.filteredHeading + (diff * this.filterFactor)) % 360;
-      if (this.filteredHeading < 0) this.filteredHeading += 360;
+      return;
+    }
+    const now = performance.now();
+    if (this.hasReading && now - this.lastUpdate < this.updateInterval) return;
+    newHeading = (newHeading % 360 + 360) % 360;
+    if (this.filteredHeading === null) this.filteredHeading = newHeading;
+    else {
+      const diff = ((newHeading - this.filteredHeading + 540) % 360) - 180;
+      this.filteredHeading = (this.filteredHeading + diff * this.filterFactor + 360) % 360;
     }
     this.heading = this.filteredHeading;
+    this.lastUpdate = now;
+    this.lastHeadingAt = now;
+    this.hasReading = true;
+    this.hasPermission = true;
   },
 
-  calculateTrueHeading: function() {
-    let heading;
-    if (this.isWebkit) {
-      heading = this.alpha;
-    } else {
-      heading = (360 - this.alpha) % 360;
-    }
-    if (Math.abs(this.gamma) > 90) {
-      heading = (heading + 180) % 360;
-    }
-    return heading;
+  hasCompass() {
+    return this.isListening && this.hasReading && this.lastHeadingAt !== null &&
+      performance.now() - this.lastHeadingAt <= this.maxReadingAge;
   },
 
-  getHeading: function() {
-    if (!this.hasPermission) {
-      return 0;
-    }
-    return Math.round(this.heading);
+  getHeading() {
+    return this.hasCompass() ? Math.round(this.heading) % 360 : null;
   },
 
-  hasCompass: function() {
-    return this.hasPermission;
-  },
-
-  getBeta: function() {
+  getBeta() {
     return this.beta;
   }
 };

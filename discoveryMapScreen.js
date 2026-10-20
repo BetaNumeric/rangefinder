@@ -14,15 +14,18 @@ let discoveryMap = {
   infoWindow: null,
   colorSelect: null,
   paths: [],  
+  themeObserver: null,
+  storageListener: null,
+  playerMarker: null,
   
   initialize() {
     if (!this.map) {
       const offset = getCanvasOffset();
       const mapDiv = createDiv('');
       mapDiv.id('discoveryMap');
-      mapDiv.style('width', '100%');
+      mapDiv.style('width', width + 'px');
       mapDiv.style('height', '75%');
-      mapDiv.position(0, height*0.25);
+      mapDiv.position(offset.x, height*0.25);
       
       const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
       
@@ -86,7 +89,10 @@ let discoveryMap = {
           padding: 8px !important;
         }
       `;
-      document.head.appendChild(style);
+      if (!document.getElementById('discovery-map-styles')) {
+        style.id = 'discovery-map-styles';
+        document.head.appendChild(style);
+      }
 
       // Add color mode controls as a map control
       const colorModeDiv = document.createElement('div');
@@ -122,17 +128,19 @@ let discoveryMap = {
       this.map.controls[google.maps.ControlPosition.TOP_LEFT].push(colorModeDiv);
 
       // Update map when settings change
-      window.addEventListener('storage', (e) => {
-        if (e.key === 'mapSettings') {
+      this.storageListener = (e) => {
+        if (e.key === 'mapSettings' && this.map) {
           const settings = JSON.parse(e.newValue || '{}');
           mapSettingsScreen.settings = { ...mapSettingsScreen.settings, ...settings };
           this.map.setMapTypeId(mapSettingsScreen.settings.satelliteView ? 'hybrid' : 'roadmap');
           this.map.setOptions({ styles: mapSettingsScreen.getMapStyles() });
         }
-      });
+      };
+      window.addEventListener('storage', this.storageListener);
 
       // Update map when theme changes
-      const themeObserver = new MutationObserver((mutations) => {
+      this.themeObserver = new MutationObserver((mutations) => {
+        if (!this.map) return;
         mutations.forEach((mutation) => {
           if (mutation.attributeName === 'data-theme') {
             const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
@@ -144,14 +152,14 @@ let discoveryMap = {
         });
       });
       
-      themeObserver.observe(document.documentElement, {
+      this.themeObserver.observe(document.documentElement, {
         attributes: true,
         attributeFilter: ['data-theme']
       });
 
       // Add player location if enabled
       if (mapSettingsScreen.settings.showPlayerLocation && playerLocation) {
-        new google.maps.Marker({
+        this.playerMarker = new google.maps.Marker({
           position: { lat: playerLocation.lat, lng: playerLocation.lon },
           map: this.map,
           icon: {
@@ -319,12 +327,19 @@ let discoveryMap = {
   },
   
   remove() {
+    if (this.themeObserver) this.themeObserver.disconnect();
+    if (this.storageListener) window.removeEventListener('storage', this.storageListener);
+    this.themeObserver = this.storageListener = null;
+    if (this.playerMarker) this.playerMarker.setMap(null);
+    this.playerMarker = null;
     if (this.map) {
       if (this.infoWindow) {
         this.infoWindow.close();
       }
       this.paths.forEach(p => p.setMap(null));
       this.paths = [];
+      this.markers.forEach(marker => marker.setMap(null));
+      google.maps.event.clearInstanceListeners(this.map);
       const mapDiv = select('#discoveryMap');
       if (mapDiv) {
         mapDiv.remove();
@@ -338,6 +353,13 @@ let discoveryMap = {
 };
 
 function drawDiscoveryMapScreen() {
+  if (!mapsApi.isReady()) {
+    discoveryMap.remove();
+    drawMapStatus(0, height / 4, width, height / 2);
+    dropdownMenu.draw('discoveries');
+    drawCloseButton();
+    return;
+  }
   // Initialize map if needed
   if (!discoveryMap.map) {
     discoveryMap.initialize();

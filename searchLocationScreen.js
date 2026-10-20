@@ -12,6 +12,7 @@ let searchLocationScreen = {
   selectedLocation: null,
 
   initialize() {
+    if (!mapsApi.isReady() || typeof google.maps.places?.SearchBox !== 'function') return;
     if (!this.searchBox) {
       const offset = getCanvasOffset();
       
@@ -57,7 +58,9 @@ let searchLocationScreen = {
         }
         
         const place = places[0];
+        if (!place.geometry || !place.geometry.location) return;
         this.selectedLocation = {
+          placeId: place.place_id,
           name: place.name,
           lat: place.geometry.location.lat(),
           lon: place.geometry.location.lng(),
@@ -76,7 +79,7 @@ let searchLocationScreen = {
   },
 
   getCountryFromPlace(place) {
-    for (let component of place.address_components) {
+    for (let component of place.address_components || []) {
       if (component.types.includes('country')) {
         return component.long_name;
       }
@@ -90,6 +93,7 @@ let searchLocationScreen = {
     }
     this.searchBox = null;
     this.elements = null;
+    this.selectedLocation = null;
   }
 };
 
@@ -109,6 +113,10 @@ function drawSearchLocationScreen() {
   // Instructions and stats
   textSize(18);
   text("Enter a location to guess", width/2, height/4);
+  if (!mapsApi.isReady()) drawMapStatus(0, height / 3, width, height / 3);
+  else if (!searchLocationScreen.searchBox) {
+    text('Place search is unavailable. Your saved locations are still available.', width / 2, height / 2);
+  }
   
   // Show custom locations count and management button
   const customLocations = dataLoader.datasets.custom.locations || [];
@@ -145,13 +153,14 @@ function drawSearchLocationScreen() {
     drawInteractiveButton(
       btnX, btnY, btnW, btnH,
       "Start Game",
-      () => {
-        dataLoader.addCustomLocation(searchLocationScreen.selectedLocation);
-        localStorage.setItem('selectedDataset', 'custom');
-        currentQuestion = searchLocationScreen.selectedLocation;
-        enteredFromSearch = true;
-        searchLocationScreen.cleanup();
-        goToScreen("game");
+      async () => {
+        if (dataLoader.isLoading) return;
+        try {
+          const location = dataLoader.addCustomLocation(searchLocationScreen.selectedLocation);
+          if (!await dataLoader.selectDataset('custom') || currentScreen !== 'search') return;
+          enteredFromSearch = true;
+          startNewGame(location);
+        } catch (error) { alert(error.message); }
       }
     );
   }

@@ -73,28 +73,19 @@ function drawSplashScreen() {
     loadingState.started = true;
     
     // Load dataset
-    loadingState.message = "V2.1 Loading";
+    loadingState.message = "Loading locations";
     const selectedDataset = localStorage.getItem('selectedDataset') || 'global';
-    dataLoader.loadQuestions(selectedDataset, (loadedQuestions) => {
-      if (loadedQuestions && loadedQuestions.length > 0) {
-        questions = loadedQuestions;
-        userSettings.radius = dataLoader.datasets[selectedDataset].defaultRadius;
-        
-        // Small delay to ensure everything is ready
-        setTimeout(() => {
-          loadingState = { 
-            started: false, 
-            progress: 0, 
-            message: "Initializing...", 
-            dots: 0, 
-            lastDotUpdate: 0,
-            rotation: 0 
-          };
-          goToScreen("mainMenu");
-        }, 500);
-      } else {
-        loadingState.message = "Error loading data";
-      }
+    dataLoader.selectDataset(dataLoader.datasets[selectedDataset] ? selectedDataset : 'global').then(loaded => {
+      if (currentScreen !== 'splash') return;
+      if (loaded) goToScreen('mainMenu');
+      else loadingState.message = 'Could not load locations';
     });
+  }
+  if (!dataLoader.isLoading && dataLoader.error) {
+    drawInteractiveButton(width / 2 - 75, height * 0.65, 150, 50, 'Try Again', () => {
+      loadingState.started = false;
+      dataLoader.error = '';
+    });
+    drawInteractiveButton(width / 2 - 75, height * 0.75, 150, 50, 'Settings', () => goToScreen('settings'));
   }
 }

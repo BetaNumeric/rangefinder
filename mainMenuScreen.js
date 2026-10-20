@@ -40,43 +40,42 @@ let rotationState = {
   currentSpeed: 1
 };
 
-let locationUpdateInterval = null;
+let locationWatchId = null;
+let locationWatchGeneration = 0;
+
+function updatePlayerLocation(position) {
+  const lat = position.coords.latitude;
+  const lon = position.coords.longitude;
+  if (!Number.isFinite(lat) || Math.abs(lat) > 90 || !Number.isFinite(lon) || Math.abs(lon) > 180) {
+    throw new Error('Invalid location reading.');
+  }
+  playerLocation = { lat, lon, accuracy: position.coords.accuracy, timestamp: position.timestamp || Date.now() };
+  localStorage.setItem('locationPermission', 'granted');
+}
 
 function startLocationUpdates() {
-  // Clear any existing interval
-  if (locationUpdateInterval) {
-    clearInterval(locationUpdateInterval);
-  }
-  
-  locationUpdateInterval = setInterval(() => {
-    if ("geolocation" in navigator) {
-      navigator.geolocation.getCurrentPosition(
-        position => {
-          playerLocation = {
-            lat: position.coords.latitude,
-            lon: position.coords.longitude
-          };
-        },
-        error => console.error("Error updating location:", error),
-        { enableHighAccuracy: true }
-      );
+  if (locationWatchId !== null || !navigator.geolocation || document.hidden) return;
+  const generation = ++locationWatchGeneration;
+  locationWatchId = navigator.geolocation.watchPosition(position => {
+    if (generation === locationWatchGeneration) updatePlayerLocation(position);
+  }, error => {
+    if (generation !== locationWatchGeneration) return;
+    if (error.code === 1) {
+      playerLocation = null;
+      localStorage.setItem('locationPermission', 'denied');
+      stopLocationUpdates();
     }
-  }, 500);
+    console.error('Location update failed:', error);
+  }, { enableHighAccuracy: true, timeout: 10000, maximumAge: 5000 });
 }
 
 function stopLocationUpdates() {
-  if (locationUpdateInterval) {
-    clearInterval(locationUpdateInterval);
-    locationUpdateInterval = null;
-  }
+  locationWatchGeneration++;
+  if (locationWatchId !== null) navigator.geolocation.clearWatch(locationWatchId);
+  locationWatchId = null;
 }
 
 function drawMainMenuScreen() {
-  // Start location updates when entering menu
-  if (!locationUpdateInterval) {
-    startLocationUpdates();
-  }
-
   // Draw logo
   if (logoMarker) {
     const maxLogoSize = min(width * 0.6, height * 0.4);
@@ -90,8 +89,8 @@ function drawMainMenuScreen() {
     
     // Only show coordinates if we have playerLocation
     if (playerLocation) {
-      latDMS = convertToDMS(playerLocation.lat, 'N', 'S');
-      lonDMS = convertToDMS(playerLocation.lon, 'E', 'W');
+      const latDMS = convertToDMS(playerLocation.lat, 'N', 'S');
+      const lonDMS = convertToDMS(playerLocation.lon, 'E', 'W');
       text(`${latDMS}   ${lonDMS}`, width/2, height/2);
     }
     
@@ -116,7 +115,7 @@ function drawMainMenuScreen() {
       image(logoMarker, 0, 0, logoWidth, logoHeight);
     }
     
-    if(!orientationService.hasPermission) {
+    if(!orientationService.hasCompass()) {
       // Update rotation state
       let currentTime = millis();
        

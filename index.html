@@ -21,20 +21,8 @@
 
   <title>Rangefinder</title>
 
-  <!-- Add after your meta tags but before other scripts -->
-  <script>
-    let googleMapsLoaded = false;
-    function initMap() {
-      console.log("Google Maps API loaded");
-      googleMapsLoaded = true;
-      if (window.initializeInteractiveMap) {
-        window.initializeInteractiveMap();
-      }
-    }
-  </script>
-  <script async defer
-    src="https://maps.googleapis.com/maps/api/js?key=${GOOGLE_MAPS_JS_API_KEY}&libraries=places,marker&callback=initMap">
-  </script>
+  <script src="config.js"></script>
+  <script src="mapsApi.js"></script>
 
   <!-- PLEASE NO CHANGES BELOW THIS LINE (UNTIL I SAY SO) -->
   <script language="javascript" type="text/javascript" src="libraries/p5.min.js"></script>
@@ -53,7 +41,6 @@
   <script language="javascript" type="text/javascript" src="searchLocationScreen.js"></script>
   <script language="javascript" type="text/javascript" src="settingsScreen.js"></script>
   <script language="javascript" type="text/javascript" src="splashScreen.js"></script>
-  <script language="javascript" type="text/javascript" src="sw.js"></script>
   <script language="javascript" type="text/javascript" src="main.js"></script>
   <!-- OK, YOU CAN MAKE CHANGES BELOW THIS LINE AGAIN -->
 
@@ -151,7 +138,7 @@
   </main>
   <script>
     if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.register('/sw.js')
+      navigator.serviceWorker.register(new URL('sw.js', document.baseURI))
         .then((registration) => {
           console.log('Service Worker registered');
         })

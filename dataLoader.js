@@ -9,6 +9,9 @@ Data management service that handles:
 
 let dataLoader = {
   isLoading: false,
+  selectedDataset: null,
+  selectionVersion: 0,
+  error: '',
   datasets: {
     global: {
       name: "Global Cities",
@@ -37,147 +40,127 @@ let dataLoader = {
     }
   },
 
-  loadQuestions: function(datasetKey, callback = () => {}) {
-    this.isLoading = true;
-    const dataset = this.datasets[datasetKey];
-    if (!dataset) {
-      console.error("Invalid dataset key:", datasetKey);
-      this.isLoading = false;
-      callback([]);
-      return;
+  readCustomLocations() {
+    const saved = JSON.parse(localStorage.getItem('customLocations') || '[]');
+    if (!Array.isArray(saved) || saved.some(location => !isValidLocation(location))) {
+      throw new Error('Saved custom locations could not be read. Export your data before replacing it.');
     }
-
-    // Calculate appropriate radius based on max distance
-    const calculateDefaultRadius = (locations) => {
-      if (!locations || locations.length === 0 || !playerLocation) {
-        console.log("Using default radius - no locations or player location");
-        return dataset.defaultRadius;
-      }
-      
-      // Find max distance
-      let maxDist = 0;
-      let validDistanceFound = false;
-      
-      locations.forEach(loc => {
-        if (typeof loc.lat === 'number' && typeof loc.lon === 'number' &&
-            !isNaN(loc.lat) && !isNaN(loc.lon)) {
-          const dist = getDistanceKm(playerLocation.lat, playerLocation.lon, loc.lat, loc.lon);
-          if (!isNaN(dist)) {
-            maxDist = Math.max(maxDist, dist);
-            validDistanceFound = true;
-          }
-        }
-      });
-      
-      // If no valid distances were found, use default
-      if (!validDistanceFound || maxDist === 0) {
-        console.log("Using default radius - no valid distances calculated");
-        return dataset.defaultRadius;
-      }
-      
-      // Round up to nice numbers
-      if (maxDist <= 10){ return Math.ceil(maxDist / 1) * 1; } 
-      if (maxDist <= 100){ return Math.ceil(maxDist / 10) * 10; } 
-      if (maxDist <= 1000){ return Math.ceil(maxDist / 100) * 100; } 
-      return Math.ceil(maxDist / 1000) * 1000; 
-    };
-
-    // Handle custom dataset differently
-    if (datasetKey === 'custom') {
-      // Load saved custom locations from localStorage
-      const savedLocations = localStorage.getItem('customLocations');
-      if (savedLocations) {
-        dataset.locations = JSON.parse(savedLocations);
-      } else {
-        dataset.locations = [];
-      }
-      
-      // Set radius based on locations
-      userSettings.radius = calculateDefaultRadius(dataset.locations);
-      
-      this.isLoading = false;
-      callback(dataset.locations);
-      return;
-    }
-
-    // Regular CSV dataset loading
-    fetch(dataset.url)
-      .then(response => response.text())
-      .then(text => {
-        const rows = text.trim().split("\n");
-        let result = [];
-        
-        for (let i = 1; i < rows.length; i++) {
-          let cols = rows[i].split(",");
-          let obj = {
-            name: cols[0].trim(),
-            lat: parseFloat(cols[1]),
-            lon: parseFloat(cols[2]),
-            type: cols[3].trim(),
-            country: cols[4].trim(),
-            population: parseInt(cols[5]) || 0
-          };
-          result.push(obj);
-        }
-        
-        // Set radius based on loaded locations
-        userSettings.radius = calculateDefaultRadius(result);
-        
-        this.isLoading = false;
-        callback(result);
-      })
-      .catch(err => {
-        console.error("Error loading location data (try reloading)", err);
-        this.isLoading = false;
-        callback([]);
-      });
+    return saved;
   },
 
-  addCustomLocation: function(location) {
-    if (!location || typeof location.lat !== 'number' || typeof location.lon !== 'number') {
-      console.warn("Invalid location data:", location);
-      return; 
+  initialize() {
+    try {
+      this.datasets.custom.locations = this.readCustomLocations();
+    } catch (error) {
+      // Preserve unreadable storage instead of silently replacing it on the next addition.
+      this.error = error.message;
     }
-    
-    // Ensure all required properties exist with defaults if needed
-    const processedLocation = {
+  },
+
+  async loadQuestions(datasetKey) {
+    const dataset = this.datasets[datasetKey];
+    if (!dataset) throw new Error('Unknown dataset.');
+    if (datasetKey === 'custom') return this.readCustomLocations();
+
+    const response = await fetch(dataset.url, { signal: AbortSignal.timeout(15000) });
+    if (!response.ok) throw new Error('The location dataset could not be downloaded.');
+    const rows = parseLocationCsv(await response.text());
+    const locations = rows.slice(1).map(cols => ({
+      name: (cols[0] || '').trim(),
+      lat: Number((cols[1] || '').trim() || NaN),
+      lon: Number((cols[2] || '').trim() || NaN),
+      type: (cols[3] || 'place').trim(),
+      country: (cols[4] || 'Unknown').trim(),
+      population: Number.parseInt(cols[5], 10) || 0
+    })).filter(isValidLocation);
+    if (locations.length === 0) throw new Error('This dataset has no usable locations.');
+    return locations;
+  },
+
+  async selectDataset(datasetKey) {
+    const version = ++this.selectionVersion;
+    this.isLoading = true;
+    this.error = '';
+    try {
+      const locations = await this.loadQuestions(datasetKey);
+      if (version !== this.selectionVersion) return false;
+      // Commit the collection and its identity together, only after a successful load.
+      localStorage.setItem('selectedDataset', datasetKey);
+      questions = locations;
+      this.selectedDataset = datasetKey;
+      if (datasetKey === 'custom') this.datasets.custom.locations = locations;
+      userSettings.radius = this.datasets[datasetKey].defaultRadius;
+      if (datasetKey === 'custom' && hasValidPlayerLocation() && locations.length) {
+        userSettings.radius = Math.min(20000, Math.max(userSettings.radius,
+          ...locations.map(location => Math.ceil(getDistanceKm(
+            playerLocation.lat, playerLocation.lon, location.lat, location.lon)))));
+      }
+      recentLocations = [];
+      // Completed answers retain their own target and dataset until the next round.
+      if (currentScreen === 'game') pickNewQuestion();
+      if (currentScreen === 'discoveries' && discoveryMap.map) discoveryMap.updateMarkers();
+      return true;
+    } catch (error) {
+      if (version === this.selectionVersion) {
+        this.error = 'Could not load locations. Check your connection or choose another dataset.';
+        console.error('Dataset load failed:', error);
+      }
+      return false;
+    } finally {
+      if (version === this.selectionVersion) this.isLoading = false;
+    }
+  },
+
+  addCustomLocation(location) {
+    if (!isValidLocation(location)) throw new Error('This place has invalid coordinates.');
+    const locations = this.readCustomLocations();
+    const existing = locations.find(loc => loc.lat === location.lat && loc.lon === location.lon);
+    const processed = existing || {
+      ...location,
+      id: location.id || location.placeId || `custom:${location.lat},${location.lon}`,
       name: location.name || 'Unknown Location',
-      lat: location.lat,
-      lon: location.lon,
-      type: location.type || 'custom',
+      type: 'custom',
       country: location.country || 'Unknown',
       population: location.population || 0
     };
-    
-    // Add to custom dataset
-    const customDataset = this.datasets.custom;
-    if (!customDataset.locations) {
-      customDataset.locations = [];
-    }
-    
-    // Check if location already exists
-    const exists = customDataset.locations.some(loc => 
-      loc && 
-      typeof loc.lat === 'number' && 
-      typeof loc.lon === 'number' &&
-      loc.lat === processedLocation.lat && 
-      loc.lon === processedLocation.lon
-    );
-    
-    if (!exists) {
-      customDataset.locations.push(processedLocation);
-      // Save to localStorage
-      localStorage.setItem('customLocations', 
-        JSON.stringify(customDataset.locations)
-      );
-      
-      // If we're currently in the custom dataset, update questions array
-      if (localStorage.getItem('selectedDataset') === 'custom') {
-        questions = customDataset.locations;
-      }
-    }
+    if (!existing) locations.push(processed);
+    // Write before updating memory: a failed write must not appear to have saved a place.
+    localStorage.setItem('customLocations', JSON.stringify(locations));
+    this.datasets.custom.locations = locations;
+    if (this.selectedDataset === 'custom') questions = locations;
+    return processed;
   }
 };
+
+function isValidLocation(location) {
+  return !!location && typeof location.name === 'string' && location.name.trim().length > 0 &&
+    Number.isFinite(location.lat) && Math.abs(location.lat) <= 90 &&
+    Number.isFinite(location.lon) && Math.abs(location.lon) <= 180;
+}
+
+// Handles quoted commas, escaped quotes, CRLF, and newlines inside quoted fields.
+function parseLocationCsv(text) {
+  const rows = [];
+  let row = [], field = '', quoted = false;
+  for (let i = 0; i < text.length; i++) {
+    const char = text[i];
+    if (char === '"') {
+      if (quoted && text[i + 1] === '"') { field += '"'; i++; }
+      else quoted = !quoted;
+    } else if (!quoted && (char === ',' || char === '\n' || char === '\r')) {
+      row.push(field); field = '';
+      if (char !== ',') {
+        if (row.some(value => value.trim())) rows.push(row);
+        row = [];
+        if (char === '\r' && text[i + 1] === '\n') i++;
+      }
+    } else field += char;
+  }
+  if (quoted) throw new Error('The dataset contains an unterminated quoted field.');
+  row.push(field);
+  if (row.some(value => value.trim())) rows.push(row);
+  return rows;
+}
 
 function filterAndSortLocationsByDistance(allLocations, playerLat, playerLon, maxRadiusKm) {
   let enriched = allLocations.map(loc => {
@@ -199,9 +182,9 @@ function getDistanceKm(lat1, lon1, lat2, lon2) {
   let rLat1 = toRad(lat1);
   let rLat2 = toRad(lat2);
 
-  let a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+  let a = Math.max(0, Math.min(1, Math.sin(dLat / 2) * Math.sin(dLat / 2) +
           Math.cos(rLat1) * Math.cos(rLat2) *
-          Math.sin(dLon / 2) * Math.sin(dLon / 2);
+          Math.sin(dLon / 2) * Math.sin(dLon / 2)));
   let c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
   return R * c;
 }

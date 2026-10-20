@@ -9,27 +9,14 @@ Scoring system that manages:
 
 let scoringService = {
   calculateScore: function(correctDistance, guessDistance, correctDir, guessDir, playerLat, playerLon, targetLat, targetLon) {
-    // Direction scoring - Linear from 0° to 90°
-    let directionDiff = Math.min(
-      Math.abs(correctDir - guessDir),
-      360 - Math.abs(correctDir - guessDir)
-    );
-    let directionScore = Math.max(0, 100 * (1 - directionDiff / 90));
+    const directionDiff = Math.abs(((guessDir - correctDir + 540) % 360) - 180);
+    const directionScore = correctDistance < 0.001 ? 100 : Math.max(0, 100 * (1 - directionDiff / 90));
+    const distanceError = Math.abs(correctDistance - guessDistance);
+    // A one-metre floor defines the zero-distance case without rounding real targets.
+    const referenceDistance = Math.max(correctDistance, 0.001);
+    const distanceScore = Math.max(0, 100 * (1 - distanceError / referenceDistance));
 
-    // Distance scoring - Method 1 (legacy)
-    let distanceError = Math.abs(correctDistance - guessDistance);
-    let distanceScore1;
-    if (correctDistance < 0.1) {
-      distanceScore1 = Math.max(0, 100 * (1 - distanceError));
-    } else if (correctDistance < 1) {
-      const relativeError = distanceError / correctDistance;
-      distanceScore1 = 100 * (1 - Math.min(1, relativeError));
-    } else {
-      const relativeError = distanceError / correctDistance;
-      distanceScore1 = 100 * Math.exp(-2 * relativeError);
-    }
-
-    // Distance scoring - Method 2 (actual distance between guess and target)
+    // The overall rating measures the map distance between the guessed and real points.
     const guessPoint = computeDestinationLatLon(
       playerLat, 
       playerLon, 
@@ -43,59 +30,33 @@ let scoringService = {
     
     // If the difference is larger than the distance to target, score is 0
     // Otherwise, score is the percentage of how close we got
-    const distanceScore2 = actualDistance > correctDistance ? 0 : 100 * (1 - actualDistance / correctDistance);
+    const distanceScore2 = Math.max(0, Math.min(100, 100 * (1 - actualDistance / referenceDistance)));
       
-    // Return both scoring methods for comparison
     return {
-      score1: Math.round((distanceScore1 + directionScore) / 2),
       score2: Math.round(distanceScore2), 
       details: {
-        distanceScore1,
-        distanceScore2,
+        distanceScore,
         directionScore,
+        distanceError,
+        directionError: directionDiff,
         actualDistance
       }
     };
   },
 
   saveScore: function(score) {
-    // Round distances according to range
-    const roundDistance = (dist) => {
-      const ranges = [
-        { max: 0.01, decimals: 3 },
-        { max: 0.1, decimals: 2 },
-        { max: 1, decimals: 1 },
-        { max: 10, decimals: 0 },
-        { max: 100, decimals: 0 },
-        { max: 1000, decimals: -1 },
-        { max: 20000, decimals: -2 }
-      ];
-
-      for (let range of ranges) {
-        if (dist <= range.max) {
-          if (range.decimals >= 0) {
-            return Number(dist.toFixed(range.decimals));
-          } else {
-            const factor = Math.pow(10, -range.decimals);
-            return Math.round(dist/factor) * factor;
-          }
-        }
-      }
-      return Math.round(dist);
-    };
-
     const scoreData = {
       timestamp: Date.now(),
+      scoringVersion: 2,
       score: score.score2,
-      scoreOld: score.score1, // (Keep old score for comparison)
-      locationName: currentQuestion.name,
-      country: currentQuestion.country,
-      dataset: localStorage.getItem('selectedDataset') || 'global',
+      locationName: score.locationName,
+      country: score.country,
+      dataset: score.dataset,
       distance: {
-        guess: roundDistance(score.guessDistance),
-        actual: roundDistance(score.correctDistance),
-        error: roundDistance(score.details.actualDistance),
-        score: Math.round(score.details.distanceScore2)
+        guess: score.guessDistance,
+        actual: score.correctDistance,
+        error: score.details.actualDistance,
+        score: Math.round(score.details.distanceScore)
       },
       direction: {
         guess: score.guessDirection,
@@ -103,9 +64,9 @@ let scoringService = {
         score: Math.round(score.details.directionScore)
       },
       location: {
-        lat: currentQuestion.lat,
-        lon: currentQuestion.lon,
-        type: currentQuestion.type
+        lat: score.targetLat,
+        lon: score.targetLon,
+        type: score.type
       },
       guess: {
         lat: score.playerLat,
@@ -199,3 +160,17 @@ let scoringService = {
     return Math.max(...filteredScores.map(s => s.score));
   }
 };
+
+function formatDistance(distanceKm) {
+  if (!Number.isFinite(distanceKm)) return '—';
+  if (distanceKm === 0) return '0 m';
+  if (distanceKm < 0.001) return '<1 m';
+  if (distanceKm < 1) return Math.round(distanceKm * 1000) + ' m';
+  return Number(distanceKm.toFixed(distanceKm < 10 ? 2 : distanceKm < 100 ? 1 : 0)) + ' km';
+}
+
+function roundGuessDistance(distanceKm) {
+  const step = distanceKm < 1 ? 0.001 : distanceKm < 10 ? 0.1 :
+    distanceKm < 1000 ? 1 : distanceKm < 10000 ? 10 : 100;
+  return Number((Math.round(distanceKm / step) * step).toFixed(3));
+}
