@@ -19,13 +19,15 @@
   <link rel="manifest" href="manifest.json">
   <meta http-equiv="Content-Security-Policy" content="upgrade-insecure-requests">
 
+  <!-- Title is updated dynamically from APP_VERSION constant in main.js -->
   <title>Rangefinder</title>
-
+  
   <script src="config.js"></script>
   <script src="mapsApi.js"></script>
 
   <!-- PLEASE NO CHANGES BELOW THIS LINE (UNTIL I SAY SO) -->
   <script language="javascript" type="text/javascript" src="libraries/p5.min.js"></script>
+  <script language="javascript" type="text/javascript" src="geoUtils.js"></script>
   <script language="javascript" type="text/javascript" src="answerScreen.js"></script>
   <script language="javascript" type="text/javascript" src="customLocationsScreen.js"></script>
   <script language="javascript" type="text/javascript" src="dataLoader.js"></script>
@@ -40,9 +42,10 @@
   <script language="javascript" type="text/javascript" src="scoringService.js"></script>
   <script language="javascript" type="text/javascript" src="searchLocationScreen.js"></script>
   <script language="javascript" type="text/javascript" src="settingsScreen.js"></script>
-  <script language="javascript" type="text/javascript" src="splashScreen.js"></script>
-  <script language="javascript" type="text/javascript" src="main.js"></script>
-  <!-- OK, YOU CAN MAKE CHANGES BELOW THIS LINE AGAIN -->
+   <script language="javascript" type="text/javascript" src="splashScreen.js"></script>
+   <script language="javascript" type="text/javascript" src="main.js"></script>
+   <script language="javascript" type="text/javascript" src="a2hs.js"></script>
+   <!-- OK, YOU CAN MAKE CHANGES BELOW THIS LINE AGAIN -->
 
   <style>
     
@@ -130,15 +133,99 @@
       -webkit-transform: translate3d(0,0,0);
       -webkit-overflow-scrolling: touch;
     }
+
+     /* Add to Home Screen Banner - styles applied via JavaScript */
+     #a2hs-banner {
+       display: none;
+     }
+
+    /* iOS Install Instructions Overlay */
+    #ios-install-overlay {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(0, 0, 0, 0.85);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 10000;
+      padding: 20px;
+    }
+    
+    .ios-install-content {
+      background: var(--background-color);
+      color: var(--text-color);
+      border-radius: 12px;
+      padding: 24px;
+      max-width: 400px;
+      width: 100%;
+      text-align: center;
+      font-family: Helvetica, Arial, sans-serif;
+    }
+    
+    .ios-install-content h2 {
+      margin: 0 0 16px 0;
+      font-size: 20px;
+    }
+    
+    .ios-install-content ol {
+      text-align: left;
+      padding-left: 20px;
+      margin: 16px 0;
+      font-size: 14px;
+      line-height: 1.6;
+    }
+    
+    .ios-install-content li {
+      margin-bottom: 8px;
+    }
+    
+    #ios-close-btn {
+      background: var(--button-bg);
+      color: var(--text-color);
+      border: none;
+      padding: 12px 24px;
+      border-radius: 8px;
+      font-size: 16px;
+      cursor: pointer;
+      margin-top: 16px;
+      font-family: Helvetica, Arial, sans-serif;
+    }
+    
   </style>
 </head>
 <body>
   <main>
     <!-- Add your game screens here as sections or divs -->
   </main>
+  
+  <!-- Add to Home Screen Banner -->
+  <div id="a2hs-banner">
+    <span id="a2hs-text"></span>
+    <button id="a2hs-install-btn" style="display: none;">Install</button>
+    <button id="a2hs-close-btn">×</button>
+  </div>
+  
+  <!-- iOS Install Instructions Overlay -->
+  <div id="ios-install-overlay">
+    <div class="ios-install-content">
+      <h2>Install Rangefinder</h2>
+      <ol>
+        <li>Tap the <strong>Share</strong> button <span style="font-size: 18px;">⎋</span> at the bottom of Safari</li>
+        <li>Scroll down and tap <strong>"Add to Home Screen"</strong></li>
+        <li>Tap <strong>"Add"</strong> in the top right</li>
+      </ol>
+      <p style="font-size: 13px; color: var(--button-locked-text); margin: 8px 0;">The app will appear on your home screen like a native app!</p>
+      <button id="ios-close-btn">Got it!</button>
+    </div>
+  </div>
+  
+  
   <script>
     if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.register(new URL('sw.js', document.baseURI))
+      navigator.serviceWorker.register('./sw.js')
         .then((registration) => {
           console.log('Service Worker registered');
         })
@@ -147,5 +234,6 @@
         });
     }
   </script>
+  
 </body>
 </html>

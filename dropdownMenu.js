@@ -171,18 +171,41 @@ let dropdownMenu = {
       this.datasetSelector.style('width', '150px');
       
       Object.entries(dataLoader.datasets).forEach(([key, dataset]) => {
-        this.datasetSelector.option(dataset.name, key);
+        // Only show custom dataset if it has locations
+        if (key !== 'custom' || 
+           (dataset.locations && dataset.locations.length > 0)) {
+          this.datasetSelector.option(dataset.name, key);
+        }
       });
       
       const currentDataset = localStorage.getItem('selectedDataset') || 'global';
-      this.datasetSelector.selected(currentDataset);
+      // If current dataset is custom but empty, switch to global
+      if (currentDataset === 'custom' && 
+          (!dataLoader.datasets.custom.locations || 
+           dataLoader.datasets.custom.locations.length === 0)) {
+        localStorage.setItem('selectedDataset', 'global');
+        this.datasetSelector.selected('global');
+      } else {
+        this.datasetSelector.selected(currentDataset);
+      }
       
-      this.datasetSelector.changed(async () => {
+      this.datasetSelector.changed(() => {
+        if (this.isChangingDataset) return;
+        this.isChangingDataset = true;
+        
         const newDataset = this.datasetSelector.value();
+        
+        // Clean up dropdown immediately when loading starts
         this.cleanup();
-        if (!await dataLoader.selectDataset(newDataset) && !dataLoader.isLoading && dataLoader.error) {
-          alert(dataLoader.error);
-        }
+        
+        // Reload questions
+        dataLoader.activateDataset(newDataset, success => {
+          if (success) {
+            if (currentScreen === 'discoveries' && discoveryMap.map) {
+              discoveryMap.updateMarkers();
+            }
+          }
+        });
       });
     }
   },

@@ -179,11 +179,6 @@ let mapSettingsScreen = {
       this.cleanup();
       return;
     }
-    if (!mapsApi.isReady()) {
-      this.cleanup();
-      drawMapStatus(0, height / 4, width, height / 2);
-      return;
-    }
 
     fill(getTextColor());
     noStroke();
@@ -192,27 +187,33 @@ let mapSettingsScreen = {
     text("Map Settings", width/2, height/6);
 
     // Initialize preview map
-    if (!this.previewMap) {
-      const offset = getCanvasOffset();
-      this.mapElement = createDiv('');
-      this.mapElement.id('previewMap');
-      this.mapElement.style('width', '100%');
-      this.mapElement.style('height', '30%');
-      this.mapElement.position(0, height/6 + 40);
+    if (!mapsApi.ensureReady() && this.previewMap) this.cleanup();
+    if (!this.previewMap && mapsApi.ensureReady()) {
+      try {
+        const offset = getCanvasOffset();
+        this.mapElement = createDiv('');
+        this.mapElement.id('previewMap');
+        this.mapElement.size(width, height*0.3);
+        this.mapElement.position(offset.x, height/6 + 40);
 
-      const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
-      this.previewMap = new google.maps.Map(this.mapElement.elt, {
-        zoom: 5,
-        center: playerLocation ? { lat: playerLocation.lat, lng: playerLocation.lon } : { lat: 0, lng: 0 },
-        disableDefaultUI: true,
-        keyboardShortcuts: false,
-        backgroundColor: isDark ? '#212121' : '#f5f5f5',
-        mapTypeId: this.settings.satelliteView ? 'hybrid' : 'roadmap',
-        styles: this.getMapStyles()
-      });
-      
-      this.updatePlayerMarker();
+        const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+        this.previewMap = new google.maps.Map(this.mapElement.elt, {
+          zoom: 5,
+          center: playerLocation ? { lat: playerLocation.lat, lng: playerLocation.lon } : { lat: 0, lng: 0 },
+          disableDefaultUI: true,
+          keyboardShortcuts: false,
+          backgroundColor: isDark ? '#212121' : '#f5f5f5',
+          mapTypeId: this.settings.satelliteView ? 'hybrid' : 'roadmap',
+          styles: this.getMapStyles()
+        });
+
+        this.updatePlayerMarker();
+      } catch (error) {
+        this.cleanup();
+        mapsApi.setError(error);
+      }
     }
+    if (!this.previewMap) mapsApi.drawStatus(0, height/6 + 40, width, height*0.3);
 
     this.updatePlayerMarker();
 
@@ -335,13 +336,9 @@ let mapSettingsScreen = {
       this.playerMarker.setMap(null);
       this.playerMarker = null;
     }
-    if (this.previewMap) {
-      if (this.mapElement) {
-        this.mapElement.remove();
-        this.mapElement = null;
-      }
-      this.previewMap = null;
-    }
+    this.mapElement?.remove();
+    this.mapElement = null;
+    this.previewMap = null;
     if (this.labelSelector) {
       this.labelSelector.remove();
       this.labelSelector = null;

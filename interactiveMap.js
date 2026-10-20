@@ -1,105 +1,194 @@
+// interactiveMap.js
+/*
+Interactive map component that handles:
+- Map initialization and display
+- Path and marker rendering
+- Score visualization
+- Map style management
+- iOS compatibility fixes
+*/
 let interactiveMap = {
   map: null,
   mapElement: null,
-  container: null,
   paths: [],
   markers: [],
-  observer: null,
-  layout: null,
-  error: false,
+  isLoaded: false,
+  lastBounds: null,
+  container: null,
+  themeObserver: null,
+  styleElement: null,
+  idleListener: null,
+  playerMarker: null,
+  pendingAnswer: null,
 
   initialize(x, y, w, h) {
-    if (!mapsApi.isReady()) {
-      if (this.map) this.remove();
-      return false;
-    }
-    if (this.error) return false;
-    if (!this.container) {
+    if (!mapsApi.ensureReady()) return false;
+    if (!this.mapElement) {
+      const offset = getCanvasOffset();
+      
       this.container = createDiv('');
       this.container.class('map-container');
-      this.mapElement = createDiv('');
-      this.mapElement.parent(this.container);
-      this.mapElement.id('map');
-    }
-    const offset = getCanvasOffset();
-    const layout = [x + offset.x, y, w, h].join(',');
-    const resized = layout !== this.layout;
-    if (resized) {
       this.container.position(x + offset.x, y);
       this.container.size(w, h);
+      
+      this.mapElement = createDiv('');
+      this.mapElement.parent(this.container);
       this.mapElement.size(w, h);
-      this.layout = layout;
+      this.mapElement.id('map');
     }
-    if (!this.map) {
-      try { this.createMap(); }
-      catch (error) {
-        console.error('Map initialization failed:', error);
-        this.remove();
-        this.error = true;
-        return false;
+
+    const offset = getCanvasOffset();
+    this.container.position(x + offset.x, y);
+    this.container.size(w, h);
+    this.mapElement.size(w, h);
+    
+    if (this.map) {
+      google.maps.event.trigger(this.map, 'resize');
+      if (this.lastBounds) {
+        this.map.fitBounds(this.lastBounds);
       }
-    } else if (resized) google.maps.event.trigger(this.map, 'resize');
-    return !!this.map;
+    }
+    
+    try {
+      return this.map ? true : this.createMap();
+    } catch (error) {
+      this.remove();
+      mapsApi.setError(error);
+      return false;
+    }
   },
 
   createMap() {
-    this.map = new google.maps.Map(this.mapElement.elt, {
+    if (!mapsApi.isReady()) return false;
+
+    const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+    const mapOptions = {
       zoom: 4,
       center: { lat: 0, lng: 0 },
       disableDefaultUI: true,
       keyboardShortcuts: false,
       gestureHandling: 'greedy',
       clickableIcons: false,
-      backgroundColor: getComputedStyle(document.documentElement).getPropertyValue('--background-color'),
+      scrollwheel: true,
+      backgroundColor: isDark ? '#212121' : '#f5f5f5',
       mapTypeId: mapSettingsScreen.settings.satelliteView ? 'hybrid' : 'roadmap',
       styles: mapSettingsScreen.getMapStyles()
-    });
-    this.observer = new MutationObserver(() => {
-      if (!this.map) return;
-      this.map.setOptions({
-        backgroundColor: getComputedStyle(document.documentElement).getPropertyValue('--background-color'),
-        styles: mapSettingsScreen.getMapStyles()
+    };
+
+    this.map = new google.maps.Map(this.mapElement.elt, mapOptions);
+    this.isLoaded = false;
+    
+    // Add custom styles for map background
+    const mapStyle = document.createElement('style');
+    mapStyle.textContent = `
+      .gm-style {
+        background-color: var(--background-color) !important;
+      }
+      .gm-style > div {
+        background-color: var(--background-color) !important;
+      }
+    `;
+    document.head.appendChild(mapStyle);
+    this.styleElement = mapStyle;
+
+    // Update map styles when theme changes
+    this.themeObserver = new MutationObserver((mutations) => {
+      mutations.forEach((mutation) => {
+        if (mutation.attributeName === 'data-theme' && this.map) {
+          const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+          this.map.setOptions({
+            backgroundColor: isDark ? '#212121' : '#f5f5f5',
+            styles: mapSettingsScreen.getMapStyles()
+          });
+        }
       });
-      if (currentScreen === 'answer') this.drawAnswer(currentAnswer);
     });
-    this.observer.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+    
+    this.themeObserver.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ['data-theme']
+    });
+
+    // Add player location marker if enabled
+    if (mapSettingsScreen.settings.showPlayerLocation && playerLocation) {
+      this.playerMarker = new google.maps.Marker({
+        position: { lat: playerLocation.lat, lng: playerLocation.lon },
+        map: this.map,
+        icon: {
+          path: google.maps.SymbolPath.CIRCLE,
+          scale: 8,
+          fillColor: '#4285F4',
+          fillOpacity: 0.7,
+          strokeWeight: 2,
+          strokeColor: '#FFFFFF'
+        },
+        title: 'Your Location'
+      });
+    }
+
+    const createdMap = this.map;
+    this.idleListener = google.maps.event.addListenerOnce(this.map, 'idle', () => {
+      if (this.map !== createdMap) return;
+      this.isLoaded = true;
+      if (this.pendingAnswer) this.drawAnswer(this.pendingAnswer);
+    });
+
+    return true;
   },
 
-  drawAnswer(answer, fitBounds = true) {
-    if (!this.map) return;
+  drawAnswer(answer) {
+    this.pendingAnswer = answer;
+    if (!this.map || !this.isLoaded) return;
+
     this.clearMap();
-    const player = { lat: answer.playerLat, lng: answer.playerLon };
-    const target = { lat: answer.targetLat, lng: answer.targetLon };
-    const point = computeDestinationLatLon(answer.playerLat, answer.playerLon, answer.guessDistance, answer.guessDirection);
-    const guess = { lat: point.lat, lng: point.lon };
-    const guessColor = getScoreHexForMap(answer.score2).replace('0x', '#');
-    const lineColor = document.documentElement.getAttribute('data-theme') === 'dark' ? '#FFFFFF' : '#000000';
-    this.markers.push(new google.maps.Marker({ position: target, map: this.map, title: answer.locationName }));
-    this.markers.push(new google.maps.Marker({
-      position: guess, map: this.map, title: 'Your guess',
-      icon: { path: google.maps.SymbolPath.CIRCLE, scale: 6, fillColor: guessColor, fillOpacity: 1, strokeWeight: 1 }
-    }));
-    if (mapSettingsScreen.settings.showPlayerLocation) {
-      this.markers.push(new google.maps.Marker({
-        position: player, map: this.map, title: 'Round starting position',
-        icon: { path: google.maps.SymbolPath.CIRCLE, scale: 7, fillColor: '#4285F4', fillOpacity: 1, strokeWeight: 2, strokeColor: '#FFFFFF' }
-      }));
-    }
-    [[player, guess, guessColor, 3, 1], [guess, target, lineColor, 1, 0.3]].forEach(([from, to, color, weight, opacity]) => {
-      this.paths.push(new google.maps.Polyline({
-        path: [from, to], geodesic: true, map: this.map,
-        strokeColor: color, strokeWeight: weight, strokeOpacity: opacity
-      }));
-    });
-    if (fitBounds) {
-      const bounds = new google.maps.LatLngBounds();
-      [player, target, guess].forEach(position => bounds.extend(position));
-      this.map.fitBounds(bounds, 30);
-    }
-  },
+    
+    const playerPos = { lat: answer.playerLat, lng: answer.playerLon };
+    const targetPos = { lat: answer.targetLat, lng: answer.targetLon };
+    const guessPos = computeDestinationLatLon(
+      answer.playerLat,
+      answer.playerLon,
+      answer.guessDistance,
+      answer.guessDirection
+    );
+    guessPos.lng = guessPos.lon;
 
-  updatePaths(answer) {
-    this.drawAnswer(answer, false);
+    const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+    const mainLineColor = isDark ? '#FFFFFF' : '#000000';
+
+    // Add marker
+    const marker = new google.maps.Marker({
+      position: targetPos,
+      map: this.map
+    });
+    
+    this.markers.push(marker);
+
+    this.paths.push(new google.maps.Polyline({
+      path: [playerPos, guessPos],
+      geodesic: true,
+      strokeColor: getScoreHexForMap(answer.score2).replace('0x', '#'),
+      strokeOpacity: 1.0,
+      strokeWeight: 3,
+      map: this.map
+    }));
+
+    this.paths.push(new google.maps.Polyline({
+      path: [guessPos, targetPos],
+      geodesic: true,
+      strokeColor: mainLineColor,
+      strokeOpacity: 0.2,
+      strokeWeight: 1,
+      map: this.map
+    }));
+
+    // Fit bounds
+    const bounds = new google.maps.LatLngBounds();
+    bounds.extend(playerPos);
+    bounds.extend(targetPos);
+    bounds.extend(guessPos);
+
+    this.lastBounds = bounds;
+    this.map.fitBounds(bounds, { padding: 50 });
   },
 
   clearMap() {
@@ -110,31 +199,59 @@ let interactiveMap = {
   },
 
   remove() {
-    if (this.observer) this.observer.disconnect();
-    this.observer = null;
     this.clearMap();
-    if (this.map) google.maps.event.clearInstanceListeners(this.map);
-    if (this.container) this.container.remove();
-    this.container = this.mapElement = this.map = this.layout = null;
-    this.error = false;
+    this.playerMarker?.setMap(null);
+    this.idleListener?.remove();
+    this.themeObserver?.disconnect();
+    this.styleElement?.remove();
+    this.container?.remove();
+    this.container = null;
+    this.mapElement = null;
+    this.map = null;
+    this.playerMarker = null;
+    this.idleListener = null;
+    this.themeObserver = null;
+    this.styleElement = null;
+    this.isLoaded = false;
+    this.lastBounds = null;
+    this.pendingAnswer = null;
+  },
+
+  updatePaths(answer) {
+    // Clear existing paths
+    this.paths.forEach(path => path.setMap(null));
+    this.paths = [];
+
+    const playerPos = { lat: answer.playerLat, lng: answer.playerLon };
+    const targetPos = { lat: answer.targetLat, lng: answer.targetLon };
+    const guessPos = computeDestinationLatLon(
+      answer.playerLat,
+      answer.playerLon,
+      answer.guessDistance,
+      answer.guessDirection
+    );
+    guessPos.lng = guessPos.lon;
+
+    const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+    const mainLineColor = isDark ? '#FFFFFF' : '#000000';
+
+    // Add paths without updating markers
+    this.paths.push(new google.maps.Polyline({
+      path: [playerPos, guessPos],
+      geodesic: true,
+      strokeColor: getScoreHexForMap(answer.score2).replace('0x', '#'),
+      strokeOpacity: 1.0,
+      strokeWeight: 3,
+      map: this.map
+    }));
+
+    this.paths.push(new google.maps.Polyline({
+      path: [guessPos, targetPos],
+      geodesic: true,
+      strokeColor: mainLineColor,
+      strokeOpacity: 0.2,
+      strokeWeight: 1,
+      map: this.map
+    }));
   }
 };
-
-function drawMapStatus(x, y, w, h) {
-  push();
-  fill(getTextColor());
-  noStroke();
-  textSize(16);
-  textAlign(CENTER, CENTER);
-  text(mapsApi.state === 'loading' ? 'Loading map…' : 'Maps are unavailable. You can still play.', x + w / 2, y + h / 3);
-  if (mapsApi.state !== 'loading') {
-    drawInteractiveButton(x + w / 2 - 65, y + h / 2, 130, 44, 'Retry map', () => {
-      staticMapImg = null;
-      staticMapError = false;
-      interactiveMap.remove();
-      mapInitialized = false;
-      mapsApi.load();
-    });
-  }
-  pop();
-}

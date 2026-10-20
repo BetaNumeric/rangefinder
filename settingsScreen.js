@@ -26,7 +26,7 @@ let settingsScreen = {
     button.style('border-radius', '10px');
     button.style('font-size', '20px');
     button.style('cursor', 'pointer');
-    button.mousePressed(onClick);
+    button.elt.addEventListener('click', onClick);
     this.elements.buttons.push(button);
     return button;
   },
@@ -48,7 +48,10 @@ let settingsScreen = {
     selector.style('text-align', 'center');
     
     Object.entries(dataLoader.datasets).forEach(([key, dataset]) => {
-      selector.option(dataset.name, key);
+      if (key !== 'custom' || 
+         (dataset.locations && dataset.locations.length > 0)) {
+        selector.option(dataset.name, key);
+      }
     });
     
     this.elements.datasetSelector = selector;
@@ -137,12 +140,15 @@ let settingsScreen = {
       // Dataset selector
       const selector = this.createDatasetSelector(width/2 - 100, startY);
       selector.selected(localStorage.getItem('selectedDataset') || 'global');
-      selector.changed(async () => {
-        const loaded = await dataLoader.selectDataset(selector.value());
-        if (!loaded && this.elements.datasetSelector === selector && !dataLoader.isLoading && dataLoader.error) {
-          selector.selected(dataLoader.selectedDataset || 'global');
-          alert(dataLoader.error);
-        }
+      selector.changed(() => {
+        const datasetKey = selector.value();
+        selector.attribute('disabled', '');
+        dataLoader.activateDataset(datasetKey, success => {
+          selector.removeAttribute('disabled');
+          if (!success) {
+            selector.selected(localStorage.getItem('selectedDataset') || 'global');
+          }
+        });
       });
       startY += spacing;  
 
@@ -246,11 +252,10 @@ let settingsScreen = {
           
           // If we're in the custom dataset, switch to global
           if (localStorage.getItem('selectedDataset') === 'custom') {
-            questions = [];
-            currentRound = null;
-            dataLoader.selectDataset('global').then(loaded => {
-              if (this.elements.datasetSelector) this.elements.datasetSelector.selected(loaded ? 'global' : 'custom');
-            });
+            localStorage.setItem('selectedDataset', 'global');
+            if (this.elements.datasetSelector) {
+              this.elements.datasetSelector.selected('global');
+            }
           }
           
           alert('All data deleted');
@@ -320,7 +325,7 @@ function getRoundedRadiusFromSlider(sliderValue) {
   let raw = segMin + (segMax - segMin)*segProg;
 
   let d = baseRadiusRanges[idx].decimals;
-  if (d >= 0) return Math.max(1, Number(raw.toFixed(d)));
+  if (d >= 0) return Number(raw.toFixed(d));
   let f = pow(10, -d);
   let val = round(raw/f)*f;
   return val <= 0 ? 1 : val;

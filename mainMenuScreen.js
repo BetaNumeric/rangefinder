@@ -40,42 +40,43 @@ let rotationState = {
   currentSpeed: 1
 };
 
-let locationWatchId = null;
-let locationWatchGeneration = 0;
-
-function updatePlayerLocation(position) {
-  const lat = position.coords.latitude;
-  const lon = position.coords.longitude;
-  if (!Number.isFinite(lat) || Math.abs(lat) > 90 || !Number.isFinite(lon) || Math.abs(lon) > 180) {
-    throw new Error('Invalid location reading.');
-  }
-  playerLocation = { lat, lon, accuracy: position.coords.accuracy, timestamp: position.timestamp || Date.now() };
-  localStorage.setItem('locationPermission', 'granted');
-}
+let locationUpdateInterval = null;
 
 function startLocationUpdates() {
-  if (locationWatchId !== null || !navigator.geolocation || document.hidden) return;
-  const generation = ++locationWatchGeneration;
-  locationWatchId = navigator.geolocation.watchPosition(position => {
-    if (generation === locationWatchGeneration) updatePlayerLocation(position);
-  }, error => {
-    if (generation !== locationWatchGeneration) return;
-    if (error.code === 1) {
-      playerLocation = null;
-      localStorage.setItem('locationPermission', 'denied');
-      stopLocationUpdates();
+  // Clear any existing interval
+  if (locationUpdateInterval) {
+    clearInterval(locationUpdateInterval);
+  }
+  
+  locationUpdateInterval = setInterval(() => {
+    if ("geolocation" in navigator) {
+      navigator.geolocation.getCurrentPosition(
+        position => {
+          playerLocation = {
+            lat: position.coords.latitude,
+            lon: position.coords.longitude
+          };
+        },
+        error => console.error("Error updating location:", error),
+        { enableHighAccuracy: true }
+      );
     }
-    console.error('Location update failed:', error);
-  }, { enableHighAccuracy: true, timeout: 10000, maximumAge: 5000 });
+  }, 500);
 }
 
 function stopLocationUpdates() {
-  locationWatchGeneration++;
-  if (locationWatchId !== null) navigator.geolocation.clearWatch(locationWatchId);
-  locationWatchId = null;
+  if (locationUpdateInterval) {
+    clearInterval(locationUpdateInterval);
+    locationUpdateInterval = null;
+  }
 }
 
 function drawMainMenuScreen() {
+  // Start location updates when entering menu
+  if (!locationUpdateInterval) {
+    startLocationUpdates();
+  }
+
   // Draw logo
   if (logoMarker) {
     const maxLogoSize = min(width * 0.6, height * 0.4);
@@ -164,8 +165,6 @@ function drawMainMenuScreen() {
 
   textSize(40);
   fill(getTextColor());
-  //text("debug_v9", width/2, height/2-height/13);
-
 
   let btnWidth = width/2;
   let btnHeight = 60;

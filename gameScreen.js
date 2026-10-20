@@ -14,8 +14,33 @@ Game screen implementation that handles:
 let directionLocked = false;
 let distanceLocked = false;
 
+// Constants for game behavior
 const RECENT_LOCATIONS_SIZE = 15;
 let recentLocations = [];
+
+// Tilt input constants
+const TILT_INPUT_MAX_ANGLE = 70; // Maximum tilt angle in degrees for distance input
+const TILT_INPUT_NORMALIZED_MIN = 0;
+const TILT_INPUT_NORMALIZED_MAX = 1;
+
+// Joystick interaction constants
+const JOYSTICK_DRAG_THRESHOLD = 5; // Minimum pixels to recognize as drag vs click
+const JOYSTICK_DISTANCE_CHANGE_MAX = 0.05; // Maximum percentage change per frame
+const JOYSTICK_DIRECTION_CHANGE_MAX = 4.0; // Maximum degrees change per frame
+
+// Note: DISTANCE_ROUNDING_RANGES is now defined in geoUtils.js and shared across the app
+
+// Cached canvas context for text measurement (performance optimization)
+let textMeasureCanvas = null;
+let textMeasureContext = null;
+
+function getTextMeasureContext() {
+  if (!textMeasureContext) {
+    textMeasureCanvas = document.createElement('canvas');
+    textMeasureContext = textMeasureCanvas.getContext('2d');
+  }
+  return textMeasureContext;
+}
 
 const LAYOUT = {
   titleY: h => h/2,    
@@ -67,8 +92,8 @@ const JOYSTICK = {
   currentY: 0,
   adjustingDistance: false,
   baseValue: 0,
-  internalValue: null,
-  internalDirection: null,
+  internalValue: 0,
+  internalDirection: 0,
   width: 120,
   borderRadius: 8,
   touchArea: 150,
@@ -97,14 +122,31 @@ const JOYSTICK = {
   }
 };
 
-// Add near the top of the file with other event handlers
-document.addEventListener('touchmove', function(e) {
-  if (JOYSTICK.active) {
-    e.preventDefault();
+// Touch event handler for joystick - stored so it can be cleaned up
+let joystickTouchMoveHandler = null;
+
+function initializeJoystickTouchHandler() {
+  if (!joystickTouchMoveHandler) {
+    joystickTouchMoveHandler = function(e) {
+      if (JOYSTICK.active) {
+        e.preventDefault();
+      }
+    };
+    document.addEventListener('touchmove', joystickTouchMoveHandler, { passive: false });
   }
-}, { passive: false });
+}
+
+function cleanupJoystickTouchHandler() {
+  if (joystickTouchMoveHandler) {
+    document.removeEventListener('touchmove', joystickTouchMoveHandler);
+    joystickTouchMoveHandler = null;
+  }
+}
 
 function drawGameScreen() {
+  // Initialize touch handler if not already done
+  initializeJoystickTouchHandler();
+  
   // Reset any lingering transformations at the start
   resetMatrix();
   
@@ -113,33 +155,22 @@ function drawGameScreen() {
       dropdownMenu.cleanup();
     }
     
-    // Show loading state
-    textAlign(CENTER, CENTER);
-    noStroke();
-    textSize(28);
-    fill(getTextColor());
-    text("Loading new locations...", width/2, height/2);
-    drawCloseButton();
+    // Show loading state with progress bar using reusable component
+    drawLoadingProgressBar(width/2, height/2 - 20, width * 0.6, "Loading new locations...");
     return;
   }
 
-  if (!currentQuestion || (!currentRound && currentQuestion.name !== 'No location found!')) {
-    goToScreen('permissions');
-    return;
-  }
-  if (!userSettings.manualControls && !orientationService.hasCompass()) {
-    fill(getTextColor());
-    noStroke();
-    textAlign(CENTER, CENTER);
-    textSize(18);
-    text('Waiting for a compass reading', width / 2, height / 3);
-    drawInteractiveButton(width / 2 - 110, height / 2, 220, 50, 'Check permissions', () => goToScreen('permissions'));
-    drawInteractiveButton(width / 2 - 110, height / 2 + 70, 220, 50, 'Manual controls', () => {
-      userSettings.manualControls = true;
-      resetLockStates();
-    });
-    drawCloseButton();
-    return;
+  if (!playerLocation) {
+    if ("geolocation" in navigator) {
+      navigator.geolocation.getCurrentPosition(position => {
+        playerLocation = {
+          lat: position.coords.latitude,
+          lon: position.coords.longitude
+        };
+      }, err => {
+        playerLocation = { lat:0, lon:0 };
+      });
+    }
   }
 
   // Draw compass with explicit push/pop pair
@@ -160,9 +191,8 @@ function drawGameScreen() {
   let boxX = width/2;
   let boxY = height/2;
   
-  // Create temporary canvas for text measurement
-  const canvas = document.createElement('canvas');
-  const ctx = canvas.getContext('2d');
+  // Use cached canvas context for text measurement (performance)
+  const ctx = getTextMeasureContext();
   
   // Start with default size
   let fontSize = 28;
@@ -201,10 +231,6 @@ function drawGameScreen() {
   let heading = directionLocked ? userGuessDirection : orientationService.getHeading();
   let directionBtn = drawLockButton(Math.round(heading), directionLocked, width/2, LAYOUT.statusY(height), '°');
   let distanceBtn = drawLockButton(userGuessDistance, distanceLocked, width/2, LAYOUT.distanceY(height), 'km');
-  if (userSettings.manualControls) {
-    textSize(14);
-    text('Manual controls: drag either value to adjust it', width / 2, height * 0.82);
-  }
 
   // Add back the submit/try again button
   let btnX = width/2 - LAYOUT.button.width/2;
@@ -251,7 +277,7 @@ function drawGameScreen() {
       () => {
         // Only allow submission if not dragging a joystick
         if (!JOYSTICK.dragStarted) {
-          if (!directionLocked && !userSettings.manualControls) {
+          if (!directionLocked) {
             userGuessDirection = orientationService.getHeading();
           }
           submitGuess();
@@ -282,7 +308,6 @@ function drawGameScreen() {
     
     if (!JOYSTICK.active) {
       if (inDirArea || inDistArea) {
-        console.log("Starting touch");
         JOYSTICK.active = true;
         // Don't set dragStarted here anymore
         JOYSTICK.adjustingDistance = inDistArea;
@@ -295,7 +320,7 @@ function drawGameScreen() {
     } else {
       // Check if we've moved enough to consider it a drag
       let dragDist = dist(JOYSTICK.touchStartX, JOYSTICK.touchStartY, mouseX, mouseY);
-      if (dragDist > 5) { // Increased threshold for better click detection
+      if (dragDist > JOYSTICK_DRAG_THRESHOLD) {
         JOYSTICK.dragStarted = true;
         if (JOYSTICK.adjustingDistance) {
           distanceLocked = true;
@@ -312,12 +337,12 @@ function drawGameScreen() {
         
         if (JOYSTICK.adjustingDistance) {
           // Store precise internal value on first touch
-          if (JOYSTICK.internalValue === null) {
+          if (!JOYSTICK.internalValue) {
             JOYSTICK.internalValue = userGuessDistance;
           }
           
           // Calculate percentage change based on offset
-          const maxChange = Math.pow(1.05, Math.min(deltaTime, 100) / (1000 / 60)) - 1;
+          const maxChange = JOYSTICK_DISTANCE_CHANGE_MAX;
           // Use exponential curve for more precision on small movements
           const normalizedOffset = offset / JOYSTICK.maxOffset;
           const changePercent = Math.sign(normalizedOffset) * 
@@ -333,15 +358,29 @@ function drawGameScreen() {
           // Constrain internal value
           JOYSTICK.internalValue = constrain(JOYSTICK.internalValue, 0.001, userSettings.radius);
           
-          userGuessDistance = roundGuessDistance(JOYSTICK.internalValue);
+          // Round for display using the same ranges as tilt input
+          const ranges = DISTANCE_ROUNDING_RANGES;
+
+          // Find appropriate rounding
+          for (let range of ranges) {
+            if (JOYSTICK.internalValue <= range.max) {
+              if (range.decimals >= 0) {
+                userGuessDistance = Number(JOYSTICK.internalValue.toFixed(range.decimals));
+              } else {
+                const factor = Math.pow(10, -range.decimals);
+                userGuessDistance = Math.round(JOYSTICK.internalValue/factor) * factor;
+              }
+              break;
+            }
+          }
         } else {
           // Store precise internal value
-          if (JOYSTICK.internalDirection === null) {
+          if (!JOYSTICK.internalDirection) {
             JOYSTICK.internalDirection = userGuessDirection;
           }
           
           // Use same exponential curve for direction changes
-          const maxDirectionChange = 4 * Math.min(deltaTime, 100) / (1000 / 60);
+          const maxDirectionChange = JOYSTICK_DIRECTION_CHANGE_MAX;
           const normalizedOffset = offset / JOYSTICK.maxOffset;
           const changeAmount = maxDirectionChange * Math.pow(Math.abs(normalizedOffset), 2);
           
@@ -405,11 +444,8 @@ function drawGameScreen() {
   
   // Update the click handling section:
   if (!mouseIsPressed && lastMousePressed) {
-    console.log("Mouse released. dragStarted:", JOYSTICK.dragStarted, "wasDragging:", JOYSTICK.wasDragging);
-    
     // Only handle unlock if we haven't dragged or just finished dragging
-    if (!JOYSTICK.dragStarted && !JOYSTICK.wasDragging && !userSettings.manualControls) {
-      console.log("Handling click");
+    if (!JOYSTICK.dragStarted && !JOYSTICK.wasDragging) {
       // Check for direction button clicks
       if (mouseX > directionBtn.x && mouseX < directionBtn.x + directionBtn.w &&
           mouseY > directionBtn.y && mouseY < directionBtn.y + directionBtn.h) {
@@ -432,7 +468,7 @@ function drawGameScreen() {
           JOYSTICK.internalValue = null;
         } else {
           distanceLocked = true;
-          userGuessDistance = userGuessDistance;
+          // Distance is already set by tilt input, just lock it
         }
       }
     }
@@ -447,19 +483,19 @@ function drawDirectionArrow() {
   imageMode(CENTER);
   translate(width/2, height/2);
   stroke(getTextColor()); 
-  strokeWeight(LAYOUT.arrow.weight);
+  strokeWeight(max(1, LAYOUT.arrow.weight));
   noFill(); 
-  line(0, -height/2+LAYOUT.statusY(height), 0, -LAYOUT.compass.size(width, height)/2-LAYOUT.arrow.headSize);
+  const topY = -LAYOUT.compass.size(width, height)/2 - LAYOUT.arrow.headSize;
+  line(0, -height/2 + LAYOUT.statusY(height), 0, topY);
 
-  if (document.documentElement.getAttribute('data-theme') === 'dark') {
-    filter(INVERT);
-  }
-  image(compassArrow, 0, -LAYOUT.compass.size(width, height)/2-LAYOUT.arrow.headSize-1, LAYOUT.arrow.headSize, LAYOUT.arrow.headSize);
-  if (document.documentElement.getAttribute('data-theme') === 'dark') {
-    filter(INVERT);
+  // Use themed arrow image
+  const arrowImg = document.documentElement.getAttribute('data-theme') === 'dark' 
+    ? compassArrowInverted 
+    : compassArrow;
+  if (arrowImg) {
+    image(arrowImg, 0, topY - 1, LAYOUT.arrow.headSize, LAYOUT.arrow.headSize);
   }
 
-  
   pop();
 }
 
@@ -500,49 +536,23 @@ function drawBasicCompass(size) {
   }
 }
 
-function calculateDistance(lat1, lon1, lat2, lon2) {
-  const R = 6371;
-  const φ1 = lat1 * Math.PI/180;
-  const φ2 = lat2 * Math.PI/180;
-  const Δφ = (lat2-lat1) * Math.PI/180;
-  const Δλ = (lon2-lon1) * Math.PI/180;
-  const a = Math.max(0, Math.min(1, Math.sin(Δφ/2) * Math.sin(Δφ/2) +
-            Math.cos(φ1) * Math.cos(φ2) *
-            Math.sin(Δλ/2) * Math.sin(Δλ/2)));
-  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
-  return R * c;
-}
-
-function calculateBearing(lat1, lon1, lat2, lon2) {
-  const φ1 = lat1 * Math.PI/180;
-  const φ2 = lat2 * Math.PI/180;
-  const λ1 = lon1 * Math.PI/180;
-  const λ2 = lon2 * Math.PI/180;
-  const y = Math.sin(λ2-λ1) * Math.cos(φ2);
-  const x = Math.cos(φ1)*Math.sin(φ2) -
-            Math.sin(φ1)*Math.cos(φ2)*Math.cos(λ2-λ1);
-  const θ = Math.atan2(y, x);
-  return (θ*180/Math.PI + 360) % 360;
-}
+// Geographic calculation functions moved to geoUtils.js
+// Keeping backward compatibility aliases here for reference:
+// - calculateDistance() -> geoUtils.calculateDistance()
+// - calculateBearing() -> geoUtils.calculateBearing()
 
 function drawTiltDistanceInput() {
   if (distanceLocked) return;
   let beta = orientationService.getBeta();
-  if (!Number.isFinite(beta)) return;
-  let normalizedTilt = constrain(beta / 70, 0, 1);
+  let normalizedTilt = constrain(
+    beta / TILT_INPUT_MAX_ANGLE, 
+    TILT_INPUT_NORMALIZED_MIN, 
+    TILT_INPUT_NORMALIZED_MAX
+  );
   let maxDist = userSettings.radius || 20000;
   let minDist = 0.001;
 
-  const baseRanges = [
-    { max: 0.01, decimals: 3 },
-    { max: 0.1, decimals: 2 },
-    { max: 1, decimals: 1 },
-    { max: 10, decimals: 1 },
-    { max: 100, decimals: 0 },
-    { max: 1000, decimals: 0 },
-    { max: 10000, decimals: -1 },
-    { max: 20000, decimals: -2 }
-  ];
+  const baseRanges = DISTANCE_ROUNDING_RANGES;
 
   let tiltRanges = buildTiltRanges(baseRanges, minDist, maxDist);
   if (tiltRanges.length === 0) {
@@ -558,7 +568,14 @@ function drawTiltDistanceInput() {
   let segMin = seg.min;
   let segMax = seg.max;
   let rawDistance = segMin + (segMax - segMin) * segmentProgress;
-  userGuessDistance = Math.min(maxDist, roundGuessDistance(rawDistance));
+  let decimals = seg.decimals;
+
+  if (decimals >= 0) {
+    userGuessDistance = Number(rawDistance.toFixed(decimals));
+  } else {
+    let factor = Math.pow(10, -decimals); 
+    userGuessDistance = Math.round(rawDistance / factor) * factor;
+  }
 }
 
 function buildTiltRanges(baseRanges, minDist, maxDist) {
@@ -578,23 +595,22 @@ function buildTiltRanges(baseRanges, minDist, maxDist) {
 }
 
 function submitGuess() {
-  console.log("Submit guess called");
   // Don't submit if no valid location
-  if (currentScreen !== 'game' || !currentRound || dataLoader.isLoading ||
-      (!userSettings.manualControls && !orientationService.hasCompass())) {
+  if (currentQuestion.name === "No location found!") {
     return;
   }
 
-  const origin = currentRound.origin;
-  const target = currentRound.question;
-  const correctDistance = calculateDistance(
-    origin.lat, origin.lon,
-    target.lat, target.lon
+  let correctDistance = calculateDistance(
+    playerLocation.lat, playerLocation.lon,
+    currentQuestion.lat, currentQuestion.lon
   );
+
+  // Round the correct distance using the shared utility
+  correctDistance = geoUtils.roundDistance(correctDistance);
   
   let correctDirection = calculateBearing(
-    origin.lat, origin.lon,
-    target.lat, target.lon
+    playerLocation.lat, playerLocation.lon,
+    currentQuestion.lat, currentQuestion.lon
   );
 
   let score = scoringService.calculateScore(
@@ -602,33 +618,25 @@ function submitGuess() {
     userGuessDistance,
     correctDirection,
     userGuessDirection,
-    origin.lat,
-    origin.lon,
-    target.lat,
-    target.lon
+    playerLocation.lat,
+    playerLocation.lon,
+    currentQuestion.lat,
+    currentQuestion.lon
   );
 
   currentAnswer = {
-    locationName: target.name,
-    country: target.country,
-    type: target.type,
-    dataset: currentRound.dataset,
     correctDistance: correctDistance,
     correctDirection: correctDirection,
     guessDistance: userGuessDistance,
     guessDirection: userGuessDirection,
+    score1: score.score1,
     score2: score.score2,
     details: score.details,
-    targetLat: target.lat,
-    targetLon: target.lon,
-    playerLat: origin.lat,
-    playerLon: origin.lon
+    targetLat: currentQuestion.lat,
+    targetLon: currentQuestion.lon,
+    playerLat: playerLocation.lat,
+    playerLon: playerLocation.lon
   };
-  try { scoringService.saveScore(currentAnswer); }
-  catch (error) {
-    currentAnswer.saveError = 'This attempt could not be saved on this device.';
-    console.error('Could not save progress:', error);
-  }
   goToScreen("answer");
 }
 
@@ -679,7 +687,7 @@ function drawLockButton(value, isLocked, x, y, label) {
   }
 
   textSize(20);
-  text(label === 'km' ? formatDistance(value) : value + (label ? ' ' + label : ''), x, y + btnH/2);
+  text(value + (label ? ' ' + label : ''), x, y + btnH/2);
   return { x: btnX, y: y, w: btnW, h: btnH };
 }
 
@@ -690,31 +698,13 @@ function handleLockButtonClick(x, y, w, h) {
 }
 
 function resetLockStates() {
-  directionLocked = userSettings.manualControls;
-  distanceLocked = userSettings.manualControls;
-  JOYSTICK.active = JOYSTICK.dragStarted = JOYSTICK.wasDragging = false;
-  JOYSTICK.internalValue = JOYSTICK.internalDirection = null;
-}
-
-function beginRound(question, dataset = dataLoader.selectedDataset || 'global') {
-  if (!hasValidPlayerLocation() || !isValidLocation(question)) return false;
-  currentQuestion = { ...question };
-  currentRound = Object.freeze({
-    question: Object.freeze({ ...question }),
-    origin: Object.freeze({ ...playerLocation }),
-    dataset
-  });
-  userGuessDistance = 0.001;
-  userGuessDirection = orientationService.getHeading() ?? 0;
-  resetLockStates();
-  return true;
+  directionLocked = false;
+  distanceLocked = false;
 }
 
 function pickNewQuestion() {
-  console.log("pickNewQuestion start");
-  if (!hasValidPlayerLocation()) {
-    currentRound = null;
-    return false;
+  if (!playerLocation) {
+    playerLocation = { lat: 52.52, lon: 13.405 };
   }
   
   let possible = filterAndSortLocationsByDistance(
@@ -723,13 +713,8 @@ function pickNewQuestion() {
     playerLocation.lon, 
     userSettings.radius
   );
-  
-  console.log("Total possible locations:", possible.length);
-  console.log("Current question:", currentQuestion?.name);
-  console.log("Recent locations:", recentLocations);
 
   if (possible.length === 0) {
-    currentRound = null;
     console.warn("No locations found within radius = " + userSettings.radius);
     currentQuestion = {
       name: "No location found!",
@@ -749,14 +734,12 @@ function pickNewQuestion() {
       currentQuestion ? loc.name !== currentQuestion.name : true
     );
   }
-  console.log("Locations after removing current:", availableLocations.length);
   
   // Then try to avoid recently used locations if we have enough options
   if (availableLocations.length > RECENT_LOCATIONS_SIZE) {
     let nonRecentLocations = availableLocations.filter(loc => 
       !recentLocations.includes(loc.name)
     );
-    console.log("Non-recent locations available:", nonRecentLocations.length);
     if (nonRecentLocations.length > 0) {
       availableLocations = nonRecentLocations;
     }
@@ -764,9 +747,7 @@ function pickNewQuestion() {
   
   // Pick a random location from available ones
   let randIndex = Math.floor(Math.random() * availableLocations.length);
-  const nextQuestion = availableLocations[randIndex] || possible[0];
-  beginRound(nextQuestion);
-  console.log("Selected new question:", currentQuestion.name);
+  currentQuestion = availableLocations[randIndex];
   
   // Add to recent locations and remove oldest if needed
   if (!recentLocations.includes(currentQuestion.name)) {
@@ -774,7 +755,6 @@ function pickNewQuestion() {
     if (recentLocations.length > RECENT_LOCATIONS_SIZE) {
       recentLocations.shift();
     }
-    console.log("Updated recent locations:", recentLocations);
   }
   
   resetLockStates();

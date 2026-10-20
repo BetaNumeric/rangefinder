@@ -4,10 +4,13 @@ Main application file that handles:
 - Game state and initialization
 - Screen management and transitions
 - Asset loading (images)
-- Window and canvas setup
+- Window and canvas setups
 - Core game loop (draw function)
 */
 /*jshint esversion: 8*/
+
+// App version - update this to change version everywhere
+const APP_VERSION = "2.41";
 
 let currentScreen = "splash"; 
 let questions = [];
@@ -15,11 +18,10 @@ let currentQuestionIndex = 0;
 let userGuessDistance = 0;
 let userGuessDirection = 0; 
 let currentQuestion = null;
-let currentRound = null;
-let pendingCustomQuestion = null;
 let compassRose;
 let compassRoseInverted;
 let compassArrow;
+let compassArrowInverted;
 let logo;
 let logoInverted;
 let logoMarker;
@@ -39,9 +41,83 @@ let enteredFromSearch = false;
 
 let userSettings = {
   radius: 2000,
-  practiceMode: false,
-  manualControls: false
+  practiceMode: false
 };
+
+// Debounce utility for performance optimization
+function debounce(func, wait) {
+  let timeout;
+  return function executedFunction(...args) {
+    const later = () => {
+      clearTimeout(timeout);
+      func(...args);
+    };
+    clearTimeout(timeout);
+    timeout = setTimeout(later, wait);
+  };
+}
+
+/**
+ * Draws a loading progress bar with status text (reusable component)
+ * @param {number} centerX - X position of center
+ * @param {number} centerY - Y position of center
+ * @param {number} barWidth - Width of progress bar
+ * @param {string} title - Title text above progress bar (optional)
+ */
+function drawLoadingProgressBar(centerX, centerY, barWidth = null, title = null) {
+  if (!dataLoader || !dataLoader.isLoading) return;
+  
+  const actualBarWidth = barWidth || width * 0.6;
+  const barHeight = 8;
+  const barX = centerX - actualBarWidth/2;
+  const barY = centerY;
+  
+  push();
+  
+  // Draw title if provided
+  if (title) {
+    textAlign(CENTER, CENTER);
+    textSize(28);
+    fill(getTextColor());
+    noStroke();
+    text(title, centerX, barY - 40);
+  }
+  
+  // Show loading status text ABOVE the progress bar
+  if (dataLoader.loadingText) {
+    textSize(14);
+    fill(getTextColor());
+    textAlign(CENTER, CENTER);
+    text(dataLoader.loadingText, centerX, barY - 10);
+  }
+  
+  // Background bar
+  noStroke();
+  fill(getTextColor());
+  rect(barX, barY, actualBarWidth, barHeight, barHeight/2);
+  
+  // Progress bar
+  fill(lerpColor(color(200, 200, 200), getTextColor(), 0.5));
+  const progress = dataLoader.loadingProgress || 0;
+  rect(barX, barY, actualBarWidth * progress, barHeight, barHeight/2);
+  
+  // Progress percentage text
+  textSize(16);
+  fill(getTextColor());
+  textAlign(CENTER, CENTER);
+  text(`${Math.round(progress * 100)}%`, centerX, barY + 20);
+  
+  // Show retry info if retrying
+  if (dataLoader.retryAttempt > 0) {
+    textSize(14);
+    fill(lerpColor(getTextColor(), color(255, 100, 0), 0.3));
+    text(`Connection issue, retry ${dataLoader.retryAttempt}/3`, centerX, barY + 50);
+  }
+  
+  pop();
+}
+
+// Maps and Places readiness is managed by mapsApi.js.
 
 function preload() {
   
@@ -72,6 +148,16 @@ function preload() {
     error => {
       console.error("Error loading arrow:", error);
       compassArrow = null;
+    }
+  );
+  
+  loadImage("assets/images/arrow_inverted.png", 
+    img => {
+      compassArrowInverted = img;
+    },
+    error => {
+      console.error("Error loading inverted arrow:", error);
+      compassArrowInverted = null;
     }
   );
   
@@ -158,7 +244,8 @@ function preload() {
 
 }
 
-function setup() {
+async function setup() {
+  mapsApi.load();
   // Calculate canvas size to maintain portrait orientation
   let canvasWidth = windowWidth;
   let canvasHeight = windowHeight;
@@ -170,60 +257,80 @@ function setup() {
   
   // Create the canvas and store the reference
   mainCanvas = createCanvas(canvasWidth, canvasHeight);
+  const mainCanvasEl = mainCanvas.elt;
   
   textAlign(CENTER, CENTER);
+  
+  // Update HTML title with version
+  document.title = `v${APP_VERSION} Rangefinder`;
 
-  dataLoader.initialize();
+  // Set default player location
+  playerLocation = { lat: 0, lon: 0 };
 
   try {
     if (screen.orientation && screen.orientation.lock) {
-      screen.orientation.lock('portrait').catch(error => console.log('Could not lock orientation:', error));
+      await screen.orientation.lock('portrait');
     } else if (screen.lockOrientation) {
       screen.lockOrientation('portrait');
     }
   } catch (error) {
-    console.log("Could not lock orientation:", error);
+    // Expected on desktop browsers - orientation lock only works on mobile devices
+    console.log("Orientation lock unavailable (normal on desktop):", error.message || error);
   }
   
-  // Native permission requests belong to the permission buttons, not startup.
+  try {
+    if ("geolocation" in navigator) {
+      const position = await new Promise((resolve, reject) => {
+        navigator.geolocation.getCurrentPosition(resolve, reject, {
+          enableHighAccuracy: true,
+          timeout: 5000,
+          maximumAge: 0
+        });
+      });
+      playerLocation = {
+        lat: position.coords.latitude,
+        lon: position.coords.longitude
+      };
+      localStorage.setItem('locationPermission', 'granted');
+    }
+  } catch (error) {
+    console.warn("Initial permission request failed (user may be prompted later):", error.message || error);
+  }
+
   orientationService.start();
   frameRate(60);
   angleMode(DEGREES);
   
-  mainCanvas = document.getElementsByTagName('canvas')[0];
-  mainCanvas.addEventListener('touchstart', function(e) {
+  // Attach input listeners to the actual canvas element
+  mainCanvasEl.addEventListener('touchstart', function(e) {
     if (currentScreen !== "permissions") {
       e.preventDefault();
     }
   }, { passive: false });
   
-  mainCanvas.addEventListener('touchmove', function(e) {
+  mainCanvasEl.addEventListener('touchmove', function(e) {
     if (currentScreen !== "permissions") {
       e.preventDefault();
     }
   }, { passive: false });
   
   // Add these new listeners
-  mainCanvas.addEventListener('touchend', function(e) {
+  mainCanvasEl.addEventListener('touchend', function(e) {
     if (currentScreen !== "permissions") {
       e.preventDefault();
     }
   }, { passive: false });
   
-  mainCanvas.addEventListener('contextmenu', function(e) {
+  mainCanvasEl.addEventListener('contextmenu', function(e) {
     e.preventDefault();
   });
   
-  // Prevent long press
-  mainCanvas.addEventListener('touchstart', function(e) {
-    e.preventDefault();
-    return false;
-  }, { passive: false });
+  // Prevent long press (merged with touchstart above)
 
-  // Initialize dark mode from localStorage
-  const darkMode = localStorage.getItem('theme') === 'dark' ||
-    (localStorage.getItem('theme') === null && localStorage.getItem('darkMode') === 'enabled');
-  document.documentElement.setAttribute('data-theme', darkMode ? 'dark' : 'light');
+  // Initialize theme from localStorage (unified with settingsScreen.js)
+  const savedTheme = localStorage.getItem('theme');
+  const theme = savedTheme === 'dark' ? 'dark' : 'light';
+  document.documentElement.setAttribute('data-theme', theme);
 
   // Set interactive map as default
   if (localStorage.getItem('useInteractiveMap') === null) {
@@ -296,7 +403,6 @@ function draw() {
 }
 
 function goToScreen(newScreen) {
-  stopLocationUpdates();
   // Cleanup previous screen
   if (currentScreen === "answer") {
     cleanupAnswerScreen();
@@ -308,35 +414,28 @@ function goToScreen(newScreen) {
     searchLocationScreen.cleanup();
   } else if (currentScreen === "permissions") {
     permissionScreen.cleanup();
-    if (newScreen !== 'game') pendingCustomQuestion = null;
   } else if (currentScreen === "mapSettings") {
     mapSettingsScreen.cleanup();
+  } else if (currentScreen === "game") {
+    // Clean up game screen event listeners
+    if (typeof cleanupJoystickTouchHandler === 'function') {
+      cleanupJoystickTouchHandler();
+    }
   }
   
   dropdownMenu.onScreenExit();
   
   currentScreen = newScreen;
   
-  updateSensorSubscriptions();
-}
-
-function hasValidPlayerLocation() {
-  return !!playerLocation && Number.isFinite(playerLocation.lat) && Math.abs(playerLocation.lat) <= 90 &&
-    Number.isFinite(playerLocation.lon) && Math.abs(playerLocation.lon) <= 180 &&
-    Number.isFinite(playerLocation.timestamp) && Date.now() - playerLocation.timestamp < 60000;
-}
-
-function updateSensorSubscriptions() {
-  const active = !document.hidden && ['mainMenu', 'permissions', 'game', 'answer'].includes(currentScreen);
-  if (active) orientationService.start();
-  else orientationService.stop();
-  if (active && currentScreen !== 'answer' && localStorage.getItem('locationPermission') === 'granted') {
+  // Start location updates when entering game screen
+  if (newScreen === "game") {
     startLocationUpdates();
-  } else stopLocationUpdates();
-}
+  }
 
-document.addEventListener('visibilitychange', updateSensorSubscriptions);
-window.addEventListener('pagehide', () => { stopLocationUpdates(); orientationService.stop(); });
+  if (newScreen === "discoveries") {
+    discoveryMap.remove();
+  }
+}
 
 function mousePressed() {
   if (currentScreen === "permissions") {
@@ -351,31 +450,45 @@ function getCanvasOffset() {
   };
 }
 
+// Debounced resize timer
+let resizeDebounceTimer = null;
+
+// Window resize handler with debouncing (p5.js calls this automatically)
 function windowResized() {
-  let canvasWidth = windowWidth;
-  let canvasHeight = windowHeight;
-  
-  if (windowWidth > windowHeight) {
-    canvasWidth = windowHeight * 0.6;
+  // Clear existing timer
+  if (resizeDebounceTimer) {
+    clearTimeout(resizeDebounceTimer);
   }
   
-  resizeCanvas(canvasWidth, canvasHeight);
-  mapInitialized = false;
-  if (currentScreen === 'permissions') permissionScreen.positionButtons();
+  // Set new timer - actual resize happens after 150ms of no resize events
+  resizeDebounceTimer = setTimeout(() => {
+    let canvasWidth = windowWidth;
+    let canvasHeight = windowHeight;
+    
+    if (windowWidth > windowHeight) {
+      canvasWidth = windowHeight * 0.6;
+    }
+    
+    resizeCanvas(canvasWidth, canvasHeight);
+    
+    // Handle screen-specific resize logic
+    if (currentScreen === "answer") {
+      // Reset map initialization to trigger recreation with new dimensions
+      mapInitialized = false;
+    }
+  }, 150);
 }
 
-function startNewGame(customQuestion = null) {
-  pendingCustomQuestion = customQuestion;
-  userSettings.manualControls = false;
-  console.log("Starting new game");
+function startNewGame() {
   if (DEV_MODE) {
     if (!playerLocation) {
-      playerLocation = { lat: 52.52, lon: 13.405, timestamp: Date.now() };
+      playerLocation = { lat: 52.52, lon: 13.405 };
     }
-    userSettings.manualControls = true;
+    if (!orientationService.hasPermission) {
+      orientationService.hasPermission = true;
+    }
     currentQuestionIndex = 0;
     resetLockStates();
-    console.log("About to call pickNewQuestion from startNewGame");
     pickNewQuestion();
     goToScreen("game");
     return;
@@ -467,11 +580,21 @@ function drawInteractiveButton(x, y, w, h, label, action, cornerRadius = 10) {
   rect(x, y, w, h, cornerRadius);
   fill(getTextColor());
   textAlign(CENTER, CENTER);
-  textSize(20);
+  
+  // Responsive text sizing for buttons - scale relative to width below 300px
+  let buttonTextSize;
+  if (width < 300) {
+    // Scale relative to width (at 280px: ~18px, at 250px: ~16px)
+    buttonTextSize = Math.max(1, width * 0.064);
+  } else {
+    // Fixed size for wider screens
+    buttonTextSize = 20;
+  }
+  
+  textSize(buttonTextSize);
   text(label, x + w/2, y + h/2);
 
   if (isHovered && !mouseIsPressed && lastMousePressed) {
-    console.log("Button clicked:", label);
     action();
   }
 }

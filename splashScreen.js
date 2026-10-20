@@ -67,25 +67,42 @@ function drawSplashScreen() {
   push();
   text(""+loadingState.message + dots, width/2, height/2);
   pop();
+  
+  // Draw progress bar using reusable component
+  if (loadingState.started && dataLoader) {
+    drawLoadingProgressBar(width/2, height/2 + 40);
+  }
     
   // Start loading if not already started
   if (!loadingState.started) {
     loadingState.started = true;
     
-    // Load dataset
-    loadingState.message = "Loading locations";
+    // Preload all datasets
+    loadingState.message = `V${APP_VERSION} Loading all datasets`;
     const selectedDataset = localStorage.getItem('selectedDataset') || 'global';
-    dataLoader.selectDataset(dataLoader.datasets[selectedDataset] ? selectedDataset : 'global').then(loaded => {
-      if (currentScreen !== 'splash') return;
-      if (loaded) goToScreen('mainMenu');
-      else loadingState.message = 'Could not load locations';
+    
+    dataLoader.preloadAllDatasets(() => {
+      // Set the selected dataset as the active one
+      const selectedData = dataLoader.cache[selectedDataset];
+      if (selectedData && selectedData.length > 0) {
+        questions = selectedData;
+        userSettings.radius = dataLoader.datasets[selectedDataset].defaultRadius;
+        
+        // Small delay to ensure everything is ready
+        setTimeout(() => {
+          loadingState = { 
+            started: false, 
+            progress: 0, 
+            message: "Initializing...", 
+            dots: 0, 
+            lastDotUpdate: 0,
+            rotation: 0 
+          };
+          goToScreen("mainMenu");
+        }, 500);
+      } else {
+        loadingState.message = "Error loading data";
+      }
     });
-  }
-  if (!dataLoader.isLoading && dataLoader.error) {
-    drawInteractiveButton(width / 2 - 75, height * 0.65, 150, 50, 'Try Again', () => {
-      loadingState.started = false;
-      dataLoader.error = '';
-    });
-    drawInteractiveButton(width / 2 - 75, height * 0.75, 150, 50, 'Settings', () => goToScreen('settings'));
   }
 }

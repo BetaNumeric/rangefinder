@@ -1,92 +1,111 @@
-// Permission and usable compass readings are separate states.
+// Permission and usable compass readings are separate: relative rotation is not north.
 let orientationService = {
   alpha: 0,
-  beta: null,
-  gamma: null,
+  beta: 0,
+  gamma: 0,
   heading: 0,
   hasPermission: false,
-  hasReading: false,
-  isListening: false,
+  isWebkit: false,
   lastUpdate: 0,
-  lastHeadingAt: null,
+  lastReading: null,
+  maxReadingAge: 5000,
+  readingTimeout: 5000,
   updateInterval: 33,
   filterFactor: 0.3,
   filteredHeading: null,
-  maxReadingAge: 3000,
-  handler: null,
+  listening: false,
+  boundHandler: null,
+  headingWaiters: new Set(),
 
   start() {
-    if (!window.DeviceOrientationEvent || this.isListening) return;
-    if (!this.handler) this.handler = this.handleOrientation.bind(this);
-    window.addEventListener('deviceorientationabsolute', this.handler, { passive: true });
-    window.addEventListener('deviceorientation', this.handler, { passive: true });
-    this.isListening = true;
+    if (!window.DeviceOrientationEvent) return false;
+    if (this.listening) return true;
+    this.boundHandler = this.handleOrientation.bind(this);
+    window.addEventListener('deviceorientationabsolute', this.boundHandler, { capture: true, passive: true });
+    window.addEventListener('deviceorientation', this.boundHandler, { capture: true, passive: true });
+    this.listening = true;
+    return true;
   },
 
   stop() {
-    if (this.handler) {
-      window.removeEventListener('deviceorientationabsolute', this.handler);
-      window.removeEventListener('deviceorientation', this.handler);
+    if (this.boundHandler) {
+      window.removeEventListener('deviceorientationabsolute', this.boundHandler, true);
+      window.removeEventListener('deviceorientation', this.boundHandler, true);
     }
-    this.isListening = false;
-    this.hasReading = false;
-    this.lastHeadingAt = null;
+    this.boundHandler = null;
+    this.listening = false;
+    this.hasPermission = false;
+    this.lastReading = null;
     this.filteredHeading = null;
-    this.beta = null;
-    this.gamma = null;
+    this.headingWaiters.forEach(notify => notify(false));
   },
 
   async requestPermission() {
-    const orientationEvent = window.DeviceOrientationEvent;
-    if (!orientationEvent) return false;
-    this.start();
-    if (typeof orientationEvent.requestPermission === 'function') {
-      // Keep the native request directly in the button's user-activation call stack.
-      const response = await orientationEvent.requestPermission(true);
-      this.hasPermission = response === 'granted';
-      localStorage.setItem('compassPermission', response);
-      if (!this.hasPermission) this.stop();
-      return this.hasPermission;
+    if (!this.start()) throw new Error('A compass is not available on this device.');
+    const OrientationEvent = window.DeviceOrientationEvent;
+    if (typeof OrientationEvent.requestPermission === 'function') {
+      // Call immediately from the button handler, before any unrelated await.
+      const response = await OrientationEvent.requestPermission(true);
+      if (response !== 'granted') {
+        this.stop();
+        localStorage.setItem('compassPermission', 'denied');
+        throw new Error('Compass access denied. Please check browser settings.');
+      }
     }
-    // Browsers without a permission method must still deliver an absolute reading.
-    return this.hasCompass();
+    this.hasPermission = true;
+    localStorage.setItem('compassPermission', 'granted');
+    if (this.hasCompass()) return true;
+    return new Promise((resolve, reject) => {
+      const notify = ready => {
+        clearTimeout(timer);
+        this.headingWaiters.delete(notify);
+        if (ready) resolve(true);
+        else reject(new Error('No compass reading received. Please check your device and browser settings.'));
+      };
+      const timer = setTimeout(() => notify(false), this.readingTimeout);
+      this.headingWaiters.add(notify);
+    });
   },
 
   handleOrientation(event) {
+    // Relative events can supply tilt, but must not replace an absolute heading.
     if (Number.isFinite(event.beta)) this.beta = event.beta;
     if (Number.isFinite(event.gamma)) this.gamma = event.gamma;
+    const webkitHeading = Number.isFinite(event.webkitCompassHeading) && event.webkitCompassHeading >= 0;
+    const absoluteHeading = event.absolute === true && Number.isFinite(event.alpha);
+    if (!webkitHeading && !absoluteHeading) return;
 
-    let newHeading;
-    if (Number.isFinite(event.webkitCompassHeading) && event.webkitCompassHeading >= 0 &&
-        !(Number.isFinite(event.webkitCompassAccuracy) && event.webkitCompassAccuracy < 0)) {
-      newHeading = event.webkitCompassHeading;
-    } else if (event.absolute === true && Number.isFinite(event.alpha)) {
-      newHeading = 360 - event.alpha;
-    } else {
-      return;
-    }
     const now = performance.now();
-    if (this.hasReading && now - this.lastUpdate < this.updateInterval) return;
-    newHeading = (newHeading % 360 + 360) % 360;
-    if (this.filteredHeading === null) this.filteredHeading = newHeading;
-    else {
-      const diff = ((newHeading - this.filteredHeading + 540) % 360) - 180;
+    if (this.lastReading !== null && now - this.lastUpdate < this.updateInterval) return;
+    this.lastUpdate = now;
+    this.isWebkit = webkitHeading;
+    this.alpha = webkitHeading ? event.webkitCompassHeading : event.alpha;
+    const newHeading = this.calculateTrueHeading();
+    if (this.filteredHeading === null || this.lastReading === null || now - this.lastReading > this.maxReadingAge) {
+      this.filteredHeading = newHeading;
+    } else {
+      let diff = ((newHeading - this.filteredHeading + 540) % 360) - 180;
       this.filteredHeading = (this.filteredHeading + diff * this.filterFactor + 360) % 360;
     }
     this.heading = this.filteredHeading;
-    this.lastUpdate = now;
-    this.lastHeadingAt = now;
-    this.hasReading = true;
+    this.lastReading = now;
     this.hasPermission = true;
+    this.headingWaiters.forEach(notify => notify(true));
   },
 
-  hasCompass() {
-    return this.isListening && this.hasReading && this.lastHeadingAt !== null &&
-      performance.now() - this.lastHeadingAt <= this.maxReadingAge;
+  calculateTrueHeading() {
+    let heading = this.isWebkit ? this.alpha : 360 - this.alpha;
+    if (Math.abs(this.gamma) > 90) heading += 180;
+    return (heading % 360 + 360) % 360;
   },
 
   getHeading() {
-    return this.hasCompass() ? Math.round(this.heading) % 360 : null;
+    return this.hasCompass() ? Math.round(this.heading) % 360 : 0;
+  },
+
+  hasCompass() {
+    return this.hasPermission && this.lastReading !== null &&
+      performance.now() - this.lastReading <= this.maxReadingAge;
   },
 
   getBeta() {

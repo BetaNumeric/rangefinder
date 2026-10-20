@@ -1,131 +1,116 @@
-// searchLocationScreen.js
-/*
-Custom location search screen that provides:
-- Location search functionality
-- Place selection
-- Custom location game setup
-- Location data processing
-*/ 
-
+// Custom place search uses the current Places widget and requests only needed fields.
 let searchLocationScreen = {
   searchBox: null,
+  elements: null,
   selectedLocation: null,
+  message: '',
+  selectionVersion: 0,
+  selectHandler: null,
+  inputHandler: null,
+  errorHandler: null,
 
   initialize() {
-    if (!mapsApi.isReady() || typeof google.maps.places?.SearchBox !== 'function') return;
+    if (!mapsApi.ensureReady()) return false;
     if (!this.searchBox) {
-      const offset = getCanvasOffset();
-      
-      // Create search input
-      const input = createInput('');
-      const inputWidth = 300;
-      const horizontalPadding = 32; // 16px on each side
-      
-      // Adjust width to account for padding
-      input.size(inputWidth - horizontalPadding, 40);
-      input.position(width/2 - inputWidth/2 + offset.x, height/3);
-      
-      input.style('font-size', '16px');
-      input.style('padding', '8px 16px');
-      input.style('border-radius', '8px');
-      input.style('border', 'none');
-      input.style('background-color', 'var(--button-bg)');
-      input.style('color', 'var(--text-color)');
-      input.attribute('placeholder', 'Search for a location...');
-      
-      // Style the placeholder text
-      const placeholderStyle = document.createElement('style');
-      placeholderStyle.textContent = `
-        input::placeholder {
-          color: var(--button-locked-text);
-          opacity: 1;
-        }
-        input:focus {
-          outline: none;
-          box-shadow: 0 0 0 2px var(--text-color);
-        }
-      `;
-      document.head.appendChild(placeholderStyle);
-      
-      // Create searchBox using Google Places API
-      this.searchBox = new google.maps.places.SearchBox(input.elt);
-      
-      // Handle place selection
-      this.searchBox.addListener('places_changed', () => {
-        const places = this.searchBox.getPlaces();
-        if (places.length === 0) {
-          return;
-        }
-        
-        const place = places[0];
-        if (!place.geometry || !place.geometry.location) return;
-        this.selectedLocation = {
-          placeId: place.place_id,
-          name: place.name,
-          lat: place.geometry.location.lat(),
-          lon: place.geometry.location.lng(),
-          type: 'custom',
-          country: this.getCountryFromPlace(place)
+      const host = createDiv('');
+      this.elements = { input: host };
+      try {
+        const widget = new google.maps.places.PlaceAutocompleteElement();
+        widget.setAttribute('aria-label', 'Search for a location');
+        widget.style.width = '100%';
+        host.elt.appendChild(widget);
+        this.searchBox = widget;
+        this.selectHandler = async event => {
+          const version = ++this.selectionVersion;
+          this.selectedLocation = null;
+          this.message = 'Loading location…';
+          try {
+            const place = event.placePrediction.toPlace();
+            await place.fetchFields({ fields: ['displayName', 'location', 'addressComponents'] });
+            if (this.searchBox !== widget || version !== this.selectionVersion) return;
+            if (!place.location) throw new Error('This place has no coordinates.');
+            this.selectedLocation = {
+              name: place.displayName || 'Unknown Location',
+              lat: place.location.lat(),
+              lon: place.location.lng(),
+              type: 'custom',
+              country: this.getCountryFromPlace(place)
+            };
+            this.message = '';
+          } catch (error) {
+            if (this.searchBox !== widget || version !== this.selectionVersion) return;
+            this.message = 'Could not load this location. Please try another search.';
+            console.warn('Place selection failed:', error);
+          }
         };
-      });
-      
-      this.elements = { input };
-    } else {
-      // Update position on resize
-      const offset = getCanvasOffset();
-      const inputWidth = 300;
-      this.elements.input.position(width/2 - inputWidth/2 + offset.x, height/3);
+        this.inputHandler = () => {
+          this.selectionVersion++;
+          this.selectedLocation = null;
+          this.message = '';
+        };
+        this.errorHandler = () => {
+          this.selectionVersion++;
+          this.selectedLocation = null;
+          this.message = 'Search is unavailable right now. Please try again.';
+        };
+        widget.addEventListener('gmp-select', this.selectHandler);
+        widget.addEventListener('input', this.inputHandler);
+        widget.addEventListener('gmp-error', this.errorHandler);
+      } catch (error) {
+        this.cleanup();
+        mapsApi.setError(error);
+        return false;
+      }
     }
+    const offset = getCanvasOffset();
+    const inputWidth = Math.min(300, width - 32);
+    this.elements.input.size(inputWidth, 50);
+    this.elements.input.position(width/2 - inputWidth/2 + offset.x, height/3);
+    this.searchBox.style.colorScheme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'light';
+    return true;
   },
 
   getCountryFromPlace(place) {
-    for (let component of place.address_components || []) {
-      if (component.types.includes('country')) {
-        return component.long_name;
-      }
-    }
-    return 'Unknown';
+    return place.addressComponents?.find(component => component.types.includes('country'))?.longText || 'Unknown';
   },
 
   cleanup() {
-    if (this.elements) {
-      Object.values(this.elements).forEach(element => element.remove());
+    if (this.searchBox) {
+      this.searchBox.removeEventListener('gmp-select', this.selectHandler);
+      this.searchBox.removeEventListener('input', this.inputHandler);
+      this.searchBox.removeEventListener('gmp-error', this.errorHandler);
     }
+    if (this.elements) Object.values(this.elements).forEach(element => element.remove());
+    this.selectionVersion++;
     this.searchBox = null;
     this.elements = null;
     this.selectedLocation = null;
+    this.message = '';
   }
 };
 
 function drawSearchLocationScreen() {
+  const searchReady = searchLocationScreen.initialize();
 
-
-  // Initialize search box if needed
-  searchLocationScreen.initialize();
-
-  // Title
   fill(getTextColor());
   noStroke();
   textSize(32);
   textAlign(CENTER, CENTER);
-  text("Search Location", width/2, height/6);
-
-  // Instructions and stats
+  text('Search Location', width/2, height/6);
   textSize(18);
-  text("Enter a location to guess", width/2, height/4);
-  if (!mapsApi.isReady()) drawMapStatus(0, height / 3, width, height / 3);
-  else if (!searchLocationScreen.searchBox) {
-    text('Place search is unavailable. Your saved locations are still available.', width / 2, height / 2);
+  text('Enter a location to guess', width/2, height/4);
+  if (!searchReady) {
+    mapsApi.drawStatus(0, height/3, width, height/3);
+  } else if (searchLocationScreen.message) {
+    textSize(16);
+    text(searchLocationScreen.message, 16, height/3 + 75, width - 32, 70);
   }
-  
-  // Show custom locations count and management button
+
   const customLocations = dataLoader.datasets.custom.locations || [];
-  let manageBtnW = 250;
-  let manageBtnH = 40;
-  let manageBtnX = width/2 - manageBtnW/2;
-  let manageBtnY = height * 0.8;
-  
-  // Style as a more subtle button
+  const manageBtnW = 250;
+  const manageBtnH = 40;
+  const manageBtnX = width/2 - manageBtnW/2;
+  const manageBtnY = height * 0.8;
   push();
   textAlign(CENTER);
   textSize(16);
@@ -134,44 +119,35 @@ function drawSearchLocationScreen() {
   fill(getTextColor());
   text(`Manage Custom Locations (${customLocations.length})`, width/2, manageBtnY + manageBtnH/2);
   pop();
-  
-  // Handle click
+
   if (mouseIsPressed && !lastMousePressed &&
       mouseX > manageBtnX && mouseX < manageBtnX + manageBtnW &&
       mouseY > manageBtnY && mouseY < manageBtnY + manageBtnH) {
-    searchLocationScreen.cleanup();
-    goToScreen("customLocations");
-  }
-  
-  // Play button
-  if (searchLocationScreen.selectedLocation) {
-    let btnW = 150;
-    let btnH = 50;
-    let btnX = width/2 - btnW/2;
-    let btnY = height * 0.9;
-
-    drawInteractiveButton(
-      btnX, btnY, btnW, btnH,
-      "Start Game",
-      async () => {
-        if (dataLoader.isLoading) return;
-        try {
-          const location = dataLoader.addCustomLocation(searchLocationScreen.selectedLocation);
-          if (!await dataLoader.selectDataset('custom') || currentScreen !== 'search') return;
-          enteredFromSearch = true;
-          startNewGame(location);
-        } catch (error) { alert(error.message); }
-      }
-    );
-  }
-  
-  
-  // Draw dropdown menu
-  dropdownMenu.draw('search');
-  
-  if (drawCloseButton()) {
-    searchLocationScreen.cleanup();
+    goToScreen('customLocations');
     return;
   }
 
+  if (searchReady && searchLocationScreen.selectedLocation) {
+    drawInteractiveButton(width/2 - 75, height * 0.9, 150, 50, 'Start Game', () => {
+      const location = searchLocationScreen.selectedLocation;
+      const exists = customLocations.some(loc =>
+        Math.abs(loc.lat - location.lat) < 0.00001 && Math.abs(loc.lon - location.lon) < 0.00001);
+      if (!exists && !dataLoader.addCustomLocation(location)) {
+        searchLocationScreen.message = 'Could not save this location. Please try again.';
+        return;
+      }
+      dataLoader.activateDataset('custom', success => {
+        if (!success) return;
+        currentQuestion = location;
+        enteredFromSearch = true;
+        resetLockStates();
+        const ready = playerLocation && orientationService.hasCompass() &&
+          localStorage.getItem('locationPermission') === 'granted';
+        goToScreen(ready ? 'game' : 'permissions');
+      });
+    });
+  }
+
+  dropdownMenu.draw('search');
+  drawCloseButton();
 }

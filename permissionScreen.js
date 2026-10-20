@@ -1,134 +1,211 @@
-let permissionScreen = {
-  message: '',
-  locationButton: null,
-  compassButton: null,
-  continueButton: null,
-  generation: 0,
+// permissionScreen.js
+/*
+Permission management screen that handles:
+- Location permission requests
+- Compass permission requests
+- Permission status display
+- Fallback options
+*/
+/*jshint esversion: 8 */
 
-  draw() {
-    if (drawCloseButton()) return;
+let permissionScreen = {
+  needsLocation: true,
+  needsCompass: true,
+  message: "",
+  compassButton: null,
+  locationButton: null,
+  continueButton: null,
+  
+  draw: function() {
+    if (DEV_MODE) {
+      startNewGame();
+      return;
+    }
+    if (drawCloseButton()) {
+      this.cleanup();
+      return;
+    }
+    
+    // Title
     textAlign(CENTER, CENTER);
     noStroke();
+    textSize(32);
     fill(getTextColor());
-    textSize(30);
-    text('Location and compass', width / 2, height / 6);
-    textSize(16);
+    text("Permissions Needed", width/2, height/6);
+    
     if (window.isSecureContext) {
-      text('Enable location, then choose your controls.', width / 2, height / 3 - 40);
+      // Subtitle
+      textSize(20);
+      fill(getTextColor());
+      text("This game needs access to:", width/2, height/3 - 40);
       this.createButtons();
-      this.positionButtons();
     } else {
-      text('Open this game over HTTPS or localhost.', width / 2, height / 3);
+      textSize(20);
+      fill(255, 0, 0);
+      text("This game requires a secure connection (HTTPS).", width/2, height/3);
+      text("Please use HTTPS or localhost to play.", width/2, height/3 + 30);
     }
+    
+    // Update button colors but keep status indication
     if (this.locationButton) {
-      this.locationButton.style('background-color', getPermissionStatusColor(hasValidPlayerLocation()));
-      this.compassButton.style('background-color', getPermissionStatusColor(orientationService.hasCompass()));
+      const isGranted = localStorage.getItem('locationPermission') === 'granted';
+      this.locationButton.style('background-color', getPermissionStatusColor(isGranted));
+      this.locationButton.style('color', 'var(--text-color)');
+      this.locationButton.style('font-family', 'Helvetica, Arial, sans-serif');
     }
-    let status = this.message;
-    if (!status && orientationService.hasPermission && !orientationService.hasCompass()) {
-      status = 'Waiting for a compass reading.\nYou can also use manual controls.';
+    if (this.compassButton) {
+      const isGranted = orientationService.hasCompass();
+      this.compassButton.style('background-color', getPermissionStatusColor(isGranted));
+      this.compassButton.style('color', 'var(--text-color)');
+      this.compassButton.style('font-family', 'Helvetica, Arial, sans-serif');
     }
-    if (status) text(status, width / 2, height * 0.78);
-    if (!dataLoader.isLoading && hasValidPlayerLocation() && orientationService.hasCompass()) this.finish(false);
+      
+    if (this.message) {
+      textSize(16);
+      fill(255, 0, 0);
+      textAlign(CENTER, CENTER);
+      text(this.message, width/2, height - 100);
+    }
+    
+    // Only proceed to game if we have permissions and they were granted normally
+    if (playerLocation && orientationService.hasCompass() && 
+        localStorage.getItem('locationPermission') === 'granted') {
+      this.cleanup();
+      currentQuestionIndex = 0;
+      resetLockStates();
+      if (!enteredFromSearch) pickNewQuestion();
+      goToScreen("game");
+    }
   },
 
-  finish(manualControls) {
-    if (!hasValidPlayerLocation()) {
-      this.message = 'Enable location to start a round.';
-      return;
+  createButtons: function() {
+    const centerY = height/2 - 75; // Center point for buttons
+    const spacing = 70; // Space between buttons
+    
+    if (this.needsLocation && !this.locationButton) {
+      this.locationButton = createButton('Location');
+      this.styleButton(this.locationButton, centerY);
+      this.locationButton.elt.addEventListener('click', async () => {
+        const button = this.locationButton;
+        button.attribute('disabled', '');
+        try {
+          const position = await this.requestLocation();
+          playerLocation = {
+            lat: position.coords.latitude,
+            lon: position.coords.longitude
+          };
+          this.message = "";
+        } catch (error) {
+          this.message = "Location access denied. Please check browser settings.";
+        } finally {
+          if (this.locationButton === button) button.removeAttribute('disabled');
+        }
+      });
     }
-    if (dataLoader.isLoading) {
-      this.message = 'Wait for the locations to finish loading.';
-      return;
+
+    if (this.needsCompass && !this.compassButton) {
+      this.compassButton = createButton('Compass');
+      this.styleButton(this.compassButton, centerY + spacing);
+      this.compassButton.elt.addEventListener('click', async () => {
+        const button = this.compassButton;
+        button.attribute('disabled', '');
+        button.style('opacity', '0.5');
+        
+        try {
+          await orientationService.requestPermission();
+          this.message = "";
+        } catch (error) {
+          this.message = error.message || "Please try again or check browser settings";
+        } finally {
+          if (this.compassButton === button) {
+            button.removeAttribute('disabled');
+            button.style('opacity', '1');
+          }
+        }
+      });
     }
-    userSettings.manualControls = manualControls;
-    if (pendingCustomQuestion) {
-      const distance = getDistanceKm(playerLocation.lat, playerLocation.lon,
-        pendingCustomQuestion.lat, pendingCustomQuestion.lon);
-      userSettings.radius = Math.min(20000, Math.max(userSettings.radius, Math.ceil(distance)));
-      beginRound(pendingCustomQuestion, 'custom');
-      pendingCustomQuestion = null;
-    } else pickNewQuestion();
-    goToScreen('game');
+
+    if (!this.continueButton && DEV_MODE) {
+      this.continueButton = createButton('Start without access');
+      this.styleButton(this.continueButton, centerY + spacing * 2);
+      this.continueButton.style('background-color', 'var(--button-bg)');
+      this.continueButton.style('color', 'var(--text-color)');
+      this.continueButton.elt.addEventListener('click', () => {
+        if (!playerLocation) {
+          playerLocation = { lat: 0, lon: 0 };
+        }
+        orientationService.hasPermission = true;
+        localStorage.setItem('compassPermission', 'granted');
+        this.cleanup();
+        currentQuestionIndex = 0;
+        resetLockStates();
+        pickNewQuestion();
+        goToScreen("game");  // Continue directly to game
+      });
+    }
   },
 
-  createButtons() {
-    if (this.locationButton) return;
-    this.locationButton = createButton('Enable location');
-    this.compassButton = createButton('Enable compass');
-    this.continueButton = createButton('Use manual controls');
-    [this.locationButton, this.compassButton, this.continueButton].forEach(button => this.styleButton(button));
-    this.locationButton.mousePressed(async () => {
-      const generation = this.generation;
-      const button = this.locationButton;
-      button.attribute('disabled', '');
-      try {
-        await this.requestLocation();
-        if (generation === this.generation) this.message = '';
-      } catch (error) {
-        if (generation === this.generation) this.message = 'Location unavailable. Check access and try again.';
-      } finally { button.removeAttribute('disabled'); }
-    });
-    this.compassButton.mousePressed(async () => {
-      const generation = this.generation;
-      const button = this.compassButton;
-      button.attribute('disabled', '');
-      try {
-        const granted = await orientationService.requestPermission();
-        if (generation === this.generation) this.message = granted ? '' :
-          'No compass reading yet. Try again or use manual controls.';
-      } catch (error) {
-        if (generation === this.generation) this.message = 'Compass access unavailable. You can use manual controls.';
-      } finally { button.removeAttribute('disabled'); }
-    });
-    this.continueButton.mousePressed(() => this.finish(true));
-  },
-
-  styleButton(button) {
-    button.size(220, 50);
+  styleButton: function(button, yPosition) {
+    const offset = getCanvasOffset();
+    const btnWidth = 200;
+    
     button.style('font-size', '18px');
+    button.style('padding', '8px');
     button.style('border', 'none');
     button.style('border-radius', '10px');
-    button.style('background-color', 'var(--button-bg)');
-    button.style('color', 'var(--text-color)');
+    button.style('cursor', 'pointer');
+    button.style('width', btnWidth + 'px');
+    button.style('height', '50px');
+    button.style('touch-action', 'auto');
+    button.style('pointer-events', 'auto');
     button.style('z-index', '1000');
-    button.style('touch-action', 'manipulation');
+    button.style('font-family', 'Helvetica, Arial, sans-serif');
+    button.style('transition', 'opacity 0.2s');
+    
+    button.position(width/2 - btnWidth/2 + offset.x, yPosition);
+    
+    button.elt.addEventListener('touchstart', function(e) {
+      e.stopPropagation();
+    }, { passive: true });
   },
 
-  positionButtons() {
-    const offset = getCanvasOffset();
-    [this.locationButton, this.compassButton, this.continueButton].forEach((button, i) => {
-      if (button) button.position(offset.x + width / 2 - 110, height / 2 - 75 + i * 70);
-    });
+  cleanup: function() {
+    if (this.locationButton) {
+      this.locationButton.remove();
+      this.locationButton = null;
+    }
+    if (this.compassButton) {
+      this.compassButton.remove();
+      this.compassButton = null;
+    }
+    if (this.continueButton) {
+      this.continueButton.remove();
+      this.continueButton = null;
+    }
   },
-
+  
   requestLocation() {
-    const generation = this.generation;
     return new Promise((resolve, reject) => {
-      if (!navigator.geolocation) { reject(new Error('Geolocation unavailable.')); return; }
-      navigator.geolocation.getCurrentPosition(position => {
-        if (generation !== this.generation) { reject(new Error('Location request cancelled.')); return; }
-        try {
-          updatePlayerLocation(position);
-          updateSensorSubscriptions();
-          resolve(position);
-        } catch (error) { reject(error); }
-      }, error => {
-        if (generation === this.generation && error.code === 1) {
-          playerLocation = null;
-          localStorage.setItem('locationPermission', 'denied');
-        }
-        reject(error);
-      }, { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 });
+      if ("geolocation" in navigator) {
+        navigator.geolocation.getCurrentPosition(
+          position => {
+            playerLocation = { lat: position.coords.latitude, lon: position.coords.longitude };
+            localStorage.setItem('locationPermission', 'granted');
+            resolve(position);
+          },
+          error => {
+            localStorage.setItem('locationPermission', 'denied');
+            reject(error);
+          },
+          { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+        );
+      } else {
+        reject(new Error("Geolocation not available"));
+      }
     });
   },
 
-  cleanup() {
-    this.generation++;
-    [this.locationButton, this.compassButton, this.continueButton].forEach(button => { if (button) button.remove(); });
-    this.locationButton = this.compassButton = this.continueButton = null;
-    this.message = '';
-  },
-
-  handleClick() {}
+  handleClick: function() {
+    // Called from mousePressed in main.js if needed
+  }
 };

@@ -16,7 +16,8 @@ let currentAnswer = {
 };
 
 let staticMapImg;
-let staticMapError = false;
+let staticMapState = 'idle';
+let staticMapRequestId = 0;
 let mapInitialized = false;
 
 function drawAnswerScreen() {
@@ -39,7 +40,11 @@ function drawAnswerScreen() {
   mapW = round(mapW);
   mapH = round(mapH);
 
-  if (useInteractiveMap) {
+  if (useInteractiveMap && !mapsApi.ensureReady()) {
+    interactiveMap.remove();
+    mapInitialized = false;
+    mapsApi.drawStatus(mapX, mapY, mapW, mapH);
+  } else if (useInteractiveMap && !mapInitialized) {
 
     // Ensure dimensions are integers
     mapX = Math.floor(mapX);
@@ -48,31 +53,76 @@ function drawAnswerScreen() {
     mapH = Math.floor(mapH);
      
     const initResult = interactiveMap.initialize(mapX, mapY, mapW, mapH);
-    if (initResult && !mapInitialized) {
+    if (initResult) {
       interactiveMap.drawAnswer(currentAnswer);
       mapInitialized = true;
-    }
-    if (!initResult) {
-      mapInitialized = false;
-      drawMapStatus(mapX, mapY, mapW, mapH);
+    } else {
+      mapsApi.drawStatus(mapX, mapY, mapW, mapH);
     }
   } else if (!useInteractiveMap) {
-    if (!window.RANGEFINDER_CONFIG.googleMapsApiKey || staticMapError) {
-      drawMapStatus(mapX, mapY, mapW, mapH);
-    } else if (!staticMapImg) {
+    if (staticMapState === 'idle') {
       loadStaticMap();
     }
-    if (staticMapImg) {
+    if (staticMapState === 'ready' && staticMapImg) {
       imageMode(CORNER);
       let { w: finalW, h: finalH } = drawMapWithAspectRatio(staticMapImg, mapW, mapH, mapX, mapY);
+    } else {
+      mapsApi.drawStatus(mapX, mapY, mapW, mapH, {
+        state: staticMapState,
+        onRetry: () => { staticMapState = 'idle'; }
+      });
     }
   }
 
   if (userSettings.practiceMode) {
     // Use game screen's input handling but don't show joysticks
-    if (!distanceLocked) drawTiltDistanceInput();
+    if (!distanceLocked) {
+      const beta = orientationService.getBeta();
+      if (beta !== null) {
+        // Map each order of magnitude to 10° segments
+        const ranges = [
+          { max: 0.01, tiltRange: [0, 10] },
+          { max: 0.1, tiltRange: [10, 20] },
+          { max: 1, tiltRange: [20, 30] },
+          { max: 10, tiltRange: [30, 40] },
+          { max: 100, tiltRange: [40, 50] },
+          { max: 1000, tiltRange: [50, 60] },
+          { max: userSettings.radius, tiltRange: [60, 70] }
+        ];
+
+        // Find which range we're in
+        for (let range of ranges) {
+          if (beta <= range.tiltRange[1]) {
+            // Calculate normalized position within this range
+            const rangeBeta = (beta - range.tiltRange[0]) / 
+              (range.tiltRange[1] - range.tiltRange[0]);
+            // Map to the value range
+            const prevMax = ranges[ranges.indexOf(range) - 1]?.max || 0.001;
+            const value = prevMax + (range.max - prevMax) * rangeBeta;
+
+            
+            // Apply rounding based on the range
+            if (value <= 0.01) {
+              userGuessDistance = Number(value.toFixed(3));
+            } else if (value <= 0.1) {
+              userGuessDistance = Number(value.toFixed(2));
+            } else if (value <= 10) {
+              userGuessDistance = Number(value.toFixed(1));
+            } else if (value <= 1000) {
+              userGuessDistance = Math.round(value);
+            } else if (value <= 10000) {
+              userGuessDistance = Math.round(value/10) * 10;
+            } else {
+              userGuessDistance = Math.round(value/100) * 100;
+            }
+            break;
+          }
+        }
+        userGuessDistance = constrain(userGuessDistance, 0.001, userSettings.radius);
+      }
+    }
     
-    if (!directionLocked && orientationService.hasCompass()) {
+    if (!directionLocked) {
       userGuessDirection = orientationService.getHeading();
     }
 
@@ -97,18 +147,24 @@ function drawAnswerScreen() {
       // Update display values but don't save to history
       currentAnswer.guessDistance = userGuessDistance;
       currentAnswer.guessDirection = userGuessDirection;
+      currentAnswer.score1 = score.score1;
       currentAnswer.score2 = score.score2;
-      currentAnswer.details = score.details;
       
-      // Update the guess visualization without changing the map viewport.
+      // Update only paths on the map, not markers
       if (interactiveMap.map) {
         interactiveMap.updatePaths(currentAnswer);
       }
     }
   }
 
-  const distanceAccuracy = currentAnswer.details.distanceScore;
-  const directionAccuracy = currentAnswer.details.directionScore;
+  let distanceError = Math.abs(currentAnswer.correctDistance - currentAnswer.guessDistance);
+  let distanceAccuracy = Math.max(0, 100 - (distanceError / currentAnswer.correctDistance * 100));
+  
+  let dirError = Math.min(
+    Math.abs(currentAnswer.correctDirection - currentAnswer.guessDirection),
+    360 - Math.abs(currentAnswer.correctDirection - currentAnswer.guessDirection)
+  );
+  let directionAccuracy = Math.max(0, 100 - (dirError / 180 * 100));
 
   textSize(32);
   textAlign(CENTER, CENTER);
@@ -165,7 +221,7 @@ function drawAnswerScreen() {
     locationLink.style.lineHeight = textH + 'px';
     
     // Set text and adjust font size if needed
-    locationLink.innerText = currentAnswer.locationName;
+    locationLink.innerText = currentQuestion.name;
     
     // Start with default size and reduce if too wide
     let fontSize = 32;
@@ -175,13 +231,13 @@ function drawAnswerScreen() {
     const canvas = document.createElement('canvas');
     const ctx = canvas.getContext('2d');
     ctx.font = `bold ${fontSize}px Helvetica, Arial, sans-serif`;
-    let textWidth = ctx.measureText(currentAnswer.locationName).width;
+    let textWidth = ctx.measureText(currentQuestion.name).width;
     
     // Reduce font size until text fits
     while (textWidth > maxWidth * 0.95 && fontSize > 16) {
       fontSize -= 1;
       ctx.font = `bold ${fontSize}px Helvetica, Arial, sans-serif`;
-      textWidth = ctx.measureText(currentAnswer.locationName).width;
+      textWidth = ctx.measureText(currentQuestion.name).width;
     }
     
     locationLink.style.fontSize = fontSize + 'px';
@@ -195,8 +251,8 @@ function drawAnswerScreen() {
     cursor(HAND);
     stroke(getTextColor());
     strokeWeight(1);
-    line(locationX - textWidth(currentAnswer.locationName)/2, locationY + textH/3,
-         locationX + textWidth(currentAnswer.locationName)/2, locationY + textH/3);
+    line(locationX - textWidth(currentQuestion.name)/2, locationY + textH/3, 
+         locationX + textWidth(currentQuestion.name)/2, locationY + textH/3);
   } else {
     cursor(AUTO);
   }
@@ -206,7 +262,7 @@ function drawAnswerScreen() {
   noStroke();
   textStyle(NORMAL);
   fill(getTextColor());
-  text(currentAnswer.country, width/2, locationY + 35);
+  text(currentQuestion.country, width/2, locationY + 35);
 
   let centerY = height/4+height/20;
   let radius = min(width, height) * 0.15;
@@ -218,8 +274,8 @@ function drawAnswerScreen() {
     radius,
     distanceAccuracy,
     "Distance",
-    formatDistance(currentAnswer.guessDistance),
-    formatDistance(currentAnswer.correctDistance)
+    currentAnswer.guessDistance + " km",
+    currentAnswer.correctDistance + " km"
   );
 
   drawAccuracyCircle(
@@ -238,7 +294,7 @@ function drawAnswerScreen() {
     currentAnswer.guessDistance,
     currentAnswer.guessDirection
   );
-  let differenceDistance = (
+  let differenceDistance = round(
     calculateDistance(
       guessedCoords.lat, 
       guessedCoords.lon, 
@@ -249,14 +305,20 @@ function drawAnswerScreen() {
 
   textSize(20);
   fill(getTextColor());
-  text("Off by " + formatDistance(differenceDistance), width/2, height/4 + height/5.5);
+  text("Off by " + differenceDistance + " km", width/2, height/4 + height/5.5);
   fill(getScoreP5Color(currentAnswer.score2));
   text("Score: " + currentAnswer.score2 + "%", width/2, height/4 + height/4.5);
 
-  if (currentAnswer.saveError) {
-    fill(getTextColor());
-    textSize(14);
-    text(currentAnswer.saveError, width / 2, height * 0.87);
+  // After drawing the score
+  const currentDataset = localStorage.getItem('selectedDataset') || 'global';
+  const avgScore = scoringService.getAverageScore(currentDataset);
+  const bestScore = scoringService.getBestScore(currentDataset);
+  
+
+  // Save score when entering answer screen
+  if (!this.scoreSaved) {
+    scoringService.saveScore(currentAnswer);
+    this.scoreSaved = true;
   }
 
   let btnW = 150, btnH = 50;
@@ -289,8 +351,8 @@ function drawAnswerScreen() {
 
 function drawAccuracyCircle(x, y, radius, accuracy, label, guessValue, correctValue) {
   // Parse values to numbers for comparison
-  const guessNum = label === 'Direction' ? currentAnswer.guessDirection : currentAnswer.guessDistance;
-  const correctNum = label === 'Direction' ? currentAnswer.correctDirection : currentAnswer.correctDistance;
+  const guessNum = parseFloat(guessValue);
+  const correctNum = parseFloat(correctValue);
   
   // Special handling for direction angles
   const isDirection = label === "Direction";
@@ -328,26 +390,40 @@ function drawAccuracyCircle(x, y, radius, accuracy, label, guessValue, correctVa
   fill(getTextColor());
   textAlign(CENTER, CENTER);
   
-  textSize(16);
+  // Responsive text sizing - relative to width below 360px for better scaling
+  let labelSize, valueSize, correctSize;
+  if (width < 360) {
+    // Scale relative to width (at 320px: label=13, value=18, correct=13)
+    labelSize = Math.max(1, width * 0.04);
+    valueSize = Math.max(1, width * 0.0575);
+    correctSize = Math.max(1, width * 0.04);
+  } else {
+    // Fixed sizes for wider screens
+    labelSize = 16;
+    valueSize = 24;
+    correctSize = 16;
+  }
+  
+  textSize(labelSize);
   text(label, x, y - radius/2);
   
-  textSize(24);
+  textSize(valueSize);
   fill(col);
-  // Add arrow to indicate clockwise/counterclockwise for direction
-  //text(guessValue + (isDirection ? (isOvershot ? "↺" : "↻") : (isOvershot ? "↑" : "↓")), x, y);
   text(guessValue, x, y);
   
-  textSize(16);
+  textSize(correctSize);
   fill(getTextColor());
   text("(" + correctValue + ")", x, y + radius/2);
-  
-  // Add accuracy percentage for debugging
-  //textAlign(LEFT, CENTER);
-  //textSize(14);
-  //text(Math.round(accuracy) + "%", x + radius + 10, y);
 }
 
 function loadStaticMap() {
+  const apiKey = mapsApi.getApiKey();
+  if (!apiKey) {
+    staticMapState = 'error';
+    return;
+  }
+  staticMapState = 'loading';
+  const requestId = ++staticMapRequestId;
   let screenW = width;
   let screenH = height;
   let isPortrait = (screenH > screenW);
@@ -393,10 +469,10 @@ function loadStaticMap() {
     `style=feature:poi|visibility:off`,
     `style=feature:transit|visibility:off`,
     `markers=color:black|label:X|${tLat},${tLon}`,
-    targetPathString,
+    targetPathString, 
     guessPathString,
     differencePathString,
-    `key=${encodeURIComponent(window.RANGEFINDER_CONFIG.googleMapsApiKey)}`
+    `key=${encodeURIComponent(apiKey)}`
   ];
   
   let base = "https://maps.googleapis.com/maps/api/staticmap";
@@ -404,11 +480,10 @@ function loadStaticMap() {
 
   staticMapImg = loadImage(
     url,
-    () => {}, 
+    () => { if (requestId === staticMapRequestId) staticMapState = 'ready'; },
     err => {
-      staticMapError = true;
-      staticMapImg = null;
-      console.error('Map load error:', err);
+      if (requestId === staticMapRequestId) staticMapState = 'error';
+      console.error("Map load error:", err);
     }
   );
 }
@@ -455,27 +530,8 @@ function getScoreHexForMap(score) {
   return "0x" + hexString;
 }
 
-function computeDestinationLatLon(lat1_deg, lon1_deg, distance_km, bearing_deg) {
-  const R = 6371;
-  let lat1 = radians(lat1_deg);
-  let lon1 = radians(lon1_deg);
-  let bearing = radians(bearing_deg);
-  let d = distance_km;
-
-  let lat2 = Math.asin(
-    Math.sin(lat1) * Math.cos(d / R) +
-    Math.cos(lat1) * Math.sin(d / R) * Math.cos(bearing)
-  );
-  let lon2 = lon1 + Math.atan2(
-    Math.sin(bearing) * Math.sin(d / R) * Math.cos(lat1),
-    Math.cos(d / R) - Math.sin(lat1) * Math.sin(lat2)
-  );
-
-  let lat2_deg = degrees(lat2);
-  let lon2_deg = degrees(lon2);
-  lon2_deg = ((lon2_deg + 540) % 360) - 180;
-  return { lat: lat2_deg, lon: lon2_deg };
-}
+// Geographic calculation functions moved to geoUtils.js
+// computeDestinationLatLon() is now available via backward compatibility alias
 
 function generateGreatCirclePoints(lat1, lon1, lat2, lon2, n) {
   const φ1 = radians(lat1);
@@ -483,7 +539,6 @@ function generateGreatCirclePoints(lat1, lon1, lat2, lon2, n) {
   const φ2 = radians(lat2);
   const λ2 = radians(lon2);
   const d = centralAngle(φ1, λ1, φ2, λ2);
-  if (d < 1e-8) return [{ lat: lat1, lon: lon1 }, { lat: lat2, lon: lon2 }];
   let points = [];
 
   for (let i = 0; i <= n; i++) {
@@ -507,21 +562,24 @@ function generateGreatCirclePoints(lat1, lon1, lat2, lon2, n) {
 }
 
 function centralAngle(φ1, λ1, φ2, λ2) {
-  return Math.acos(Math.max(-1, Math.min(1,
+  return Math.acos(
     Math.sin(φ1) * Math.sin(φ2) +
     Math.cos(φ1) * Math.cos(φ2) * Math.cos(λ2 - λ1)
-  )));
+  );
 }
 
-function radians(deg) { return deg * Math.PI / 180; }
-function degrees(rad) { return rad * 180 / Math.PI; }
+// Use geoUtils functions for conversions
+function radians(deg) { return geoUtils.toRadians(deg); }
+function degrees(rad) { return geoUtils.toDegrees(rad); }
 
 // Add to cleanup when leaving answer screen
 function cleanupAnswerScreen() {
   staticMapImg = null;
-  staticMapError = false;
+  staticMapState = 'idle';
+  staticMapRequestId++;
   interactiveMap.remove();
   mapInitialized = false;
+  this.scoreSaved = false;
   userSettings.practiceMode = false;  // Turn off practice mode
   
   // Remove location link
@@ -530,6 +588,9 @@ function cleanupAnswerScreen() {
     locationLink.remove();
   }
 }
+
+// Note: Window resize is handled in main.js
+// Map reinitialization on resize is handled automatically by mapInitialized flag
 
 function truncateText(text, maxWidth) {
   let ellipsis = '...';

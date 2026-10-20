@@ -2,136 +2,116 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 
-function app(initialStorage = {}) {
-  const storage = new Map([['useInteractiveMap', 'true'], ...Object.entries(initialStorage)]);
-  const listeners = new Map();
-  const elements = new Map();
+const root = path.resolve(__dirname, '..');
+
+function createHarness(files, overrides = {}) {
+  const stored = new Map();
+  const elements = [];
   const observers = [];
-  const watches = new Map();
-  const maps = [];
-  function element(tag = 'div') {
-    const node = {
-      tagName: tag.toUpperCase(), style: {}, children: [], value: '',
-      appendChild(child) { this.children.push(child); child.parentNode = this; return child; },
-      remove() { this.removed = true; },
-      addEventListener() {},
-      getContext() { return { measureText: text => ({ width: String(text).length * 8 }) }; },
-      querySelector(tag) { return this.children.find(child => child.tagName === tag.toUpperCase()); }
-    };
-    Object.defineProperty(node, 'id', { set(id) { elements.set(id, node); } });
-    return node;
-  }
-  function wrapper(tag = 'div', label = '') {
-    const node = element(tag);
-    node.textContent = label;
-    const w = {
-      elt: node,
-      style(key, value) { node.style[key] = value; return w; },
-      position(x, y) { w.x = x; w.y = y; return w; },
-      size(width, height) { w.width = width; w.height = height; return w; },
-      parent(parent) { parent.elt.appendChild(node); return w; },
-      class() { return w; },
-      id(id) { elements.set(id, node); return w; },
-      remove() { node.remove(); },
-      option() {},
-      selected(value) { node.value = value; },
-      value(value) { if (value !== undefined) node.value = value; return node.value; },
-      changed(fn) { w.change = fn; },
-      input(fn) { w.onInput = fn; },
-      mousePressed(fn) { w.press = fn; },
-      html(value) { if (value !== undefined) node.textContent = value; return node.textContent; },
-      attribute(key, value) { node[key] = value; },
-      removeAttribute(key) { delete node[key]; }
-    };
-    return w;
-  }
-  const canvas = element('canvas');
+  const clock = { now: 100 };
+  const window = new EventTarget();
   const document = {
-    hidden: false, baseURI: 'http://localhost/rangefinder/',
-    head: element('head'), body: element('body'),
-    documentElement: { theme: 'light', getAttribute() { return this.theme; }, setAttribute(key, value) { this.theme = value; } },
-    createElement: element,
-    getElementById: id => elements.get(id) || null,
-    getElementsByTagName: () => [canvas],
-    addEventListener(name, fn) { addEventListener('document:' + name, fn); }
+    documentElement: { getAttribute: () => 'light' },
+    head: { appendChild(element) { element.attached = true; } },
+    createElement(tag) {
+      const elt = new EventTarget();
+      Object.assign(elt, {
+        tagName: tag, style: {}, children: [],
+        appendChild(child) { this.children.push(child); },
+        setAttribute(name, value) { this[name] = value; },
+        remove() { this.removed = true; }
+      });
+      return elt;
+    }
   };
-  const addEventListener = (name, fn) => {
-    if (!listeners.has(name)) listeners.set(name, new Set());
-    listeners.get(name).add(fn);
-  };
-  const c = vm.createContext({
+  function element(label = '') {
+    const result = {
+      elt: document.createElement('div'), label, options: [], attributes: {},
+      position(x, y) { this.positionValue = [x, y]; },
+      size(w, h) { this.sizeValue = [w, h]; },
+      style() {}, class() {}, parent() {}, id() {},
+      attribute(name, value) { this.attributes[name] = value; },
+      removeAttribute(name) { delete this.attributes[name]; },
+      option(label, value) { this.options.push({ label, value }); },
+      selected(value) { if (value !== undefined) this.selectedValue = value; return this.selectedValue; },
+      value() { return this.selectedValue; },
+      changed(handler) { this.changeHandler = handler; },
+      remove() { this.removed = true; },
+      html(value) { if (value !== undefined) this.label = value; return this.label; }
+    };
+    elements.push(result);
+    return result;
+  }
+  class MutationObserver {
+    constructor(callback) { this.callback = callback; observers.push(this); }
+    observe() { this.observing = true; }
+    disconnect() { this.disconnected = true; }
+  }
+  const globals = {
     console: { log() {}, warn() {}, error() {} },
-    URL, URLSearchParams, AbortSignal, Date, setTimeout, clearTimeout,
-    document, navigator: { userAgent: 'Test', geolocation: {
-      watchPosition(ok, fail) { const id = watches.size; watches.set(id, { ok, fail }); return id; },
-      clearWatch(id) { watches.delete(id); },
-      getCurrentPosition(ok) { ok({ coords: { latitude: 53, longitude: 8, accuracy: 5 }, timestamp: Date.now() }); }
-    } },
-    screen: {}, isSecureContext: true,
+    window, document, MutationObserver,
+    URL, URLSearchParams, Request, Response, ReadableStream, Event, EventTarget,
+    setTimeout, clearTimeout, setInterval, clearInterval,
+    performance: { now: () => clock.now },
     localStorage: {
-      getItem: key => storage.get(key) ?? null,
-      setItem: (key, value) => storage.set(key, String(value)),
-      removeItem: key => storage.delete(key)
+      getItem: key => stored.get(key) ?? null,
+      setItem: (key, value) => stored.set(key, String(value)),
+      removeItem: key => stored.delete(key)
     },
-    now: 100,
-    addEventListener,
-    removeEventListener: (name, fn) => listeners.get(name)?.delete(fn),
-    fetch: async () => ({ ok: true, text: async () => 'name,lat,lon,type,country,population\nBremen,53.1,8,city,Germany,1' }),
-    getComputedStyle: () => ({ getPropertyValue: () => '#ffffff' }),
-    MutationObserver: class {
-      constructor(fn) { this.fn = fn; observers.push(this); }
-      observe() { this.active = true; }
-      disconnect() { this.active = false; }
-    },
-    createDiv: () => wrapper(), createButton: label => wrapper('button', label),
-    createSelect: () => wrapper('select'), createInput: () => wrapper('input'),
-    createSlider: () => wrapper('input'), createFileInput: () => wrapper('input'),
-    select: selector => elements.get(selector.slice(1)) || null,
-    createCanvas: () => ({ elt: canvas }),
-    alert() {}, confirm: () => false,
     width: 390, height: 844, windowWidth: 390, windowHeight: 844,
-    mouseX: -1, mouseY: -1, mouseIsPressed: false, touches: [], deltaTime: 1000 / 60,
-    min: Math.min, max: Math.max, abs: Math.abs, round: Math.round, floor: Math.floor, pow: Math.pow,
-    sin: value => Math.sin(value * Math.PI / 180), dist: (x1, y1, x2, y2) => Math.hypot(x2 - x1, y2 - y1),
-    constrain: (value, min, max) => Math.max(min, Math.min(max, value)),
-    color: value => value, lerpColor: a => a, red: () => 0, green: () => 0, blue: () => 0,
-    textWidth: value => String(value).length * 8, frameRate: () => 60,
-    millis: () => 0, random: () => 0,
-    CENTER: 'center', CORNER: 'corner', LEFT: 'left', RIGHT: 'right', TOP: 'top', BOTTOM: 'bottom',
-    BOLD: 'bold', NORMAL: 'normal', DEGREES: 'degrees', HAND: 'hand', AUTO: 'auto', INVERT: 'invert'
-  });
-  c.performance = { now: () => c.now };
-  c.window = c;
-  for (const name of ['push', 'pop', 'fill', 'noFill', 'stroke', 'noStroke', 'strokeWeight', 'textSize',
-    'textAlign', 'textStyle', 'text', 'rect', 'circle', 'arc', 'line', 'triangle', 'translate', 'rotate',
-    'scale', 'image', 'imageMode', 'resetMatrix', 'background', 'cursor', 'filter', 'angleMode', 'resizeCanvas']) c[name] = () => {};
-  c.DeviceOrientationEvent = function() {};
-  class MapMock {
-    constructor() { this.options = []; this.bounds = []; this.controls = { topLeft: [] }; maps.push(this); }
-    setOptions(options) { this.options.push(options); }
-    fitBounds(bounds) { this.bounds.push(bounds); }
-    setMapTypeId() {}
-  }
-  const google = { maps: {
-    Map: MapMock,
-    Marker: class { constructor(options) { this.options = options; } setMap(map) { this.map = map; } },
-    Polyline: class { constructor(options) { this.options = options; } setMap(map) { this.map = map; } },
-    LatLngBounds: class { extend() {} }, SymbolPath: { CIRCLE: 'circle' }, ControlPosition: { TOP_LEFT: 'topLeft' },
-    event: { trigger() {}, clearInstanceListeners() {} }
-  } };
-  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
-  const files = [...html.matchAll(/<script[^>]*src="([^"]+)"/g)].map(match => match[1]);
-  for (const file of files) {
-    if (file.startsWith('libraries/')) continue;
-    vm.runInContext(fs.readFileSync(path.join(__dirname, '..', file), 'utf8'), c, { filename: file });
-  }
-  return {
-    c, storage, listeners, observers, watches, maps, google,
-    run: code => vm.runInContext(code, c),
-    emit(name, event) { for (const fn of listeners.get(name) || []) fn(event); },
-    location() { vm.runInContext('playerLocation = { lat: 53, lon: 8, accuracy: 5, timestamp: Date.now() }', c); },
-    enableMaps() { c.google = google; vm.runInContext("mapsApi.state = 'ready'", c); }
+    CENTER: 'center', CORNER: 'corner', LEFT: 'left', RIGHT: 'right',
+    BOLD: 'bold', NORMAL: 'normal', HAND: 'hand', AUTO: 'auto',
+    mouseIsPressed: false, mouseX: 0, mouseY: 0,
+    createButton: element, createSelect: element, createDiv: element,
+    getCanvasOffset: () => ({ x: 0, y: 0 }),
+    getTextColor: () => '#000000', getButtonColor: () => '#cccccc',
+    getComputedStyle: () => ({ getPropertyValue: () => '#000000' }),
+    constrain: (n, lo, hi) => Math.min(hi, Math.max(lo, n)),
+    min: Math.min, max: Math.max, round: Math.round,
+    text() {}, textSize() {}, textAlign() {}, textStyle() {},
+    noStroke() {}, noFill() {}, fill() {}, push() {}, pop() {}, rect() {},
+    color: value => value,
+    drawCloseButton: () => false,
+    ...overrides
   };
+  const context = vm.createContext(globals);
+  const run = code => vm.runInContext(code, context);
+  function load(file) {
+    vm.runInContext(fs.readFileSync(path.join(root, file), 'utf8'), context, { filename: file });
+  }
+  files.forEach(load);
+  return { context, run, load, stored, elements, observers, clock, window, document };
 }
 
-module.exports = { app };
+function fakeGoogle() {
+  const mapsCreated = [];
+  const idleListeners = [];
+  class Map {
+    constructor(element, options) { this.element = element; this.options = options; mapsCreated.push(this); }
+    fitBounds(bounds) { this.bounds = bounds; }
+    setOptions() {}
+  }
+  class Overlay {
+    constructor(options) { Object.assign(this, options); }
+    setMap(map) { this.map = map; }
+  }
+  class LatLngBounds {
+    constructor() { this.points = []; }
+    extend(point) { this.points.push(point); }
+  }
+  const google = { maps: {
+    Map, Marker: Overlay, Polyline: Overlay, LatLngBounds,
+    SymbolPath: { CIRCLE: 'circle' },
+    event: {
+      trigger() {},
+      addListenerOnce(map, type, callback) {
+        const listener = { callback, remove() { this.removed = true; } };
+        idleListeners.push(listener);
+        return listener;
+      }
+    }
+  } };
+  return { google, mapsCreated, idleListeners };
+}
+
+module.exports = { createHarness, fakeGoogle, root };
